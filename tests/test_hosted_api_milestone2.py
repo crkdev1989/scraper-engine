@@ -163,7 +163,8 @@ class HostedApiFrontendMilestoneTests(unittest.TestCase):
         self.assertEqual(["website_contact"], limits_response.json()["allowed_presets"])
         self.assertEqual(25, limits_response.json()["presets"][0]["limits"]["max_records"])
         self.assertEqual(200, health_response.status_code)
-        self.assertEqual({"status": "ok"}, health_response.json())
+        self.assertEqual("ok", health_response.json()["status"])
+        self.assertTrue(health_response.json()["ready"])
         self.assertEqual(200, download_response.status_code)
         self.assertIn("hello@example.com", download_response.text)
 

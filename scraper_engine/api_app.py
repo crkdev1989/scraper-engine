@@ -41,6 +41,7 @@ def create_app(
     max_runtime_seconds: int | None = None,
     max_download_bytes: int | None = None,
     max_jobs_per_hour_per_ip: int | None = None,
+    retention_hours: int | None = None,
 ) -> FastAPI:
     repo_root = Path(__file__).resolve().parent.parent
     service = HostedJobService(
@@ -53,6 +54,7 @@ def create_app(
         max_runtime_seconds=max_runtime_seconds,
         max_download_bytes=max_download_bytes,
         max_jobs_per_hour_per_ip=max_jobs_per_hour_per_ip,
+        retention_hours=retention_hours,
     )
 
     app = FastAPI(title="scraper-engine hosted backend", version="0.1.0")
@@ -79,9 +81,13 @@ def create_app(
     def get_limits() -> dict[str, Any]:
         return service.limits()
 
+    @app.get("/api/stats")
+    def get_stats() -> dict[str, int]:
+        return service.get_stats()
+
     @app.get("/health")
     def get_health() -> dict[str, Any]:
-        return {"status": "ok"}
+        return service.health()
 
     @app.post("/api/jobs", status_code=202)
     def submit_job(payload: JobSubmissionRequest, request: Request) -> dict[str, Any]:
