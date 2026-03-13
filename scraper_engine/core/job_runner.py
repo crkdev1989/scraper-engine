@@ -5,7 +5,10 @@ from typing import Any
 
 from scraper_engine.core.models import EngineConfig, RunContext
 from scraper_engine.crawl.crawler import Crawler
+from scraper_engine.crawl.fetcher import Fetcher
+from scraper_engine.extractors.directory_extractors import DirectoryListExtractor
 from scraper_engine.extractors.registry import ExtractorRegistry
+from scraper_engine.outputs.paths import raw_page_path
 from scraper_engine.schemas.mapper import SchemaMapper
 from scraper_engine.utils.logging_utils import log_event
 
@@ -13,17 +16,30 @@ from scraper_engine.utils.logging_utils import log_event
 class JobRunner:
     def __init__(
         self,
+        fetcher: Fetcher,
         crawler: Crawler,
         extractor_registry: ExtractorRegistry,
         mapper: SchemaMapper,
         logger=None,
     ) -> None:
+        self.fetcher = fetcher
         self.crawler = crawler
         self.extractor_registry = extractor_registry
+        self.directory_extractor = DirectoryListExtractor()
         self.mapper = mapper
         self.logger = logger
 
     def run(
+        self,
+        targets: list[str],
+        config: EngineConfig,
+        run_context: RunContext,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if config.mode == "directory_list":
+            return self._run_directory_list(targets, config, run_context)
+        return self._run_site_scan(targets, config, run_context)
+
+    def _run_site_scan(
         self,
         targets: list[str],
         config: EngineConfig,
@@ -108,6 +124,105 @@ class JobRunner:
                 pages_crawled=len(crawl_result.pages),
                 pages_succeeded=target_pages_succeeded,
                 pages_failed=target_pages_failed,
+            )
+
+        report = {
+            "target_count": len(targets),
+            "row_count": len(rows),
+            "error_count": len(errors),
+            "pages_crawled": pages_crawled,
+            "pages_succeeded": pages_succeeded,
+            "pages_failed": pages_failed,
+            "extracted_field_names": [field.name for field in config.extraction.fields],
+            "targets": target_reports,
+            "notes": notes,
+            "errors": errors,
+        }
+        return rows, report
+
+    def _run_directory_list(
+        self,
+        targets: list[str],
+        config: EngineConfig,
+        run_context: RunContext,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        target_reports: list[dict[str, Any]] = []
+        notes: list[str] = []
+        errors: list[str] = []
+        pages_crawled = 0
+        pages_succeeded = 0
+        pages_failed = 0
+
+        for target in targets:
+            page = self.fetcher.fetch(target)
+            pages_crawled += 1
+
+            if page.html and run_context.raw_pages_dir:
+                output_path = raw_page_path(run_context.raw_pages_dir, page.url, pages_crawled)
+                output_path.write_text(page.html, encoding="utf-8")
+                log_event(
+                    self.logger,
+                    logging.INFO,
+                    "WRITE OUTPUTS",
+                    "Stored raw HTML page.",
+                    url=page.url,
+                    path=output_path.name,
+                )
+
+            if page.error:
+                pages_failed += 1
+                errors.append(f"{page.url}: {page.error}")
+                target_reports.append(
+                    {
+                        "target": target,
+                        "pages_crawled": 1,
+                        "pages_succeeded": 0,
+                        "pages_failed": 1,
+                        "row_count": 0,
+                        "errors": [page.error],
+                        "source_urls": [],
+                    }
+                )
+                continue
+
+            pages_succeeded += 1
+            extracted_rows = self.directory_extractor.extract_records(
+                html=page.html or "",
+                page_url=page.url,
+                extraction_config=config.extraction,
+            )
+            for record in extracted_rows:
+                rows.append(
+                    {
+                        "input_url": target,
+                        "source_url": page.url,
+                        "page_url": page.url,
+                        **record,
+                    }
+                )
+
+            row_count = len(extracted_rows)
+            target_reports.append(
+                {
+                    "target": target,
+                    "pages_crawled": 1,
+                    "pages_succeeded": 1,
+                    "pages_failed": 0,
+                    "row_count": row_count,
+                    "errors": [],
+                    "source_urls": [page.url],
+                }
+            )
+            notes.append(f"Extracted {row_count} listing record(s) from {page.url}.")
+            log_event(
+                self.logger,
+                logging.INFO,
+                "EXTRACT FIELDS",
+                "Extracted directory listing records.",
+                target=target,
+                source_url=page.url,
+                row_count=row_count,
             )
 
         report = {

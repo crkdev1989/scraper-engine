@@ -41,7 +41,7 @@ class Pipeline:
             logger,
             logging.INFO,
             "START RUN",
-            "Initialized site scan run.",
+            "Initialized run.",
             run_name=run_context.run_name,
             mode=config.mode,
             config_path=options.config_path.resolve(),
@@ -68,6 +68,7 @@ class Pipeline:
         fetcher = Fetcher(config.requests, logger=logger)
         crawler = Crawler(fetcher, logger=logger)
         runner = JobRunner(
+            fetcher=fetcher,
             crawler=crawler,
             extractor_registry=ExtractorRegistry(),
             mapper=SchemaMapper(),
@@ -108,7 +109,7 @@ class Pipeline:
 
         preferred_columns = list(config.schema.get("columns", []))
         if not preferred_columns:
-            preferred_columns = ["input_url", "page_url", "status_code"]
+            preferred_columns = ["input_url", "source_url", "page_url", "status_code"]
             preferred_columns.extend(field.name for field in config.extraction.fields)
             preferred_columns.append("source_urls")
         if config.output.write_csv:

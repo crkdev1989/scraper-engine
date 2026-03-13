@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urljoin
+
 from lxml import html as lxml_html
 
 from scraper_engine.utils.text_utils import clean_whitespace, dedupe_preserve_order
@@ -14,12 +16,15 @@ def build_xpath_tree(html: str):
         return None
 
 
-def extract_css(soup, selector: str, attribute: str | None = None, many: bool = False):
+def extract_css(
+    soup,
+    selector: str,
+    attribute: str | None = None,
+    many: bool = False,
+    base_url: str | None = None,
+):
     nodes = soup.select(selector) if soup else []
-    if attribute:
-        values = [node.get(attribute, "") for node in nodes]
-    else:
-        values = [clean_whitespace(node.get_text(" ", strip=True)) for node in nodes]
+    values = [_extract_css_node_value(node, attribute=attribute, base_url=base_url) for node in nodes]
 
     values = dedupe_preserve_order([value for value in values if value])
     if many:
@@ -45,3 +50,28 @@ def extract_xpath(tree, expression: str, many: bool = False):
     if many:
         return values
     return values[0] if values else None
+
+
+def extract_css_from_node(
+    node,
+    selector: str,
+    attribute: str | None = None,
+    many: bool = False,
+    base_url: str | None = None,
+):
+    return extract_css(
+        node,
+        selector=selector,
+        attribute=attribute,
+        many=many,
+        base_url=base_url,
+    )
+
+
+def _extract_css_node_value(node, attribute: str | None = None, base_url: str | None = None):
+    if attribute and attribute not in {"text", "text_content"}:
+        raw_value = node.get(attribute, "")
+        if attribute in {"href", "src"} and raw_value and base_url:
+            return urljoin(base_url, raw_value)
+        return clean_whitespace(raw_value)
+    return clean_whitespace(node.get_text(" ", strip=True))

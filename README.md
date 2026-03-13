@@ -17,7 +17,7 @@ This stage includes:
 - per-run output folders with logs and reports
 - starter public and private configs
 
-This stage does **not** yet include browser automation, a frontend, FastAPI, or a finished `directory_list` / `directory_detail` engine.
+This stage does **not** yet include browser automation, a frontend, FastAPI, or a finished `directory_detail` engine.
 
 ## Project Layout
 
@@ -125,6 +125,7 @@ The engine currently supports:
 - YAML config files
 - reusable extractor types such as `page_title`, `business_name`, `emails`, `phones`, `contact_links`, `social_links`, `internal_links`, `address`, and `headings`
 - selector-based extraction with CSS or XPath
+- selector-based `directory_list` extraction with per-listing CSS field extraction
 - `--url` input
 - `--input` file input from `.txt`, `.csv`, `.json`, `.yaml`, `.yml`
 - same-domain prioritized site crawling with retries, timeout handling, duplicate URL prevention, relative URL resolution, and merged public outputs
@@ -136,6 +137,7 @@ Implemented now:
 
 - real v1 `site_scan` execution from the CLI
 - public presets for `website_contact`, `business_info`, and `page_data`
+- minimum viable `directory_list` mode for extracting multiple records from a single directory page
 - merged single-row public outputs with CSV/JSON/report artifacts
 - optional `raw_pages/` storage
 - per-run console and file logging
@@ -144,9 +146,13 @@ Implemented now:
 Not implemented yet:
 
 - browser-rendered scraping
-- full schema-aware directory extraction flows
+- detail-page following for `directory_detail`
 - API or web wrapper
 - advanced anti-bot handling
 - polished sync deployment automation
+
+## Sample Directory List Config
+
+See `configs/private/real_estate_agents.yaml` for a Milestone 1 `directory_list` example that extracts one row per listing container using CSS selectors.
 
 Public presets are separated from private presets from day one to keep the shared engine clean while supporting different product surfaces later.

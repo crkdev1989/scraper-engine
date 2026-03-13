@@ -1,6 +1,6 @@
 name: real_estate_agents
 mode: directory_list
-description: Private preset scaffold for listing real estate agents from directory pages.
+description: Sample directory_list preset for extracting agent rows from a directory page.
 
 requests:
   timeout_seconds: 25
@@ -21,21 +21,20 @@ crawl:
   store_debug_html: false
 
 extraction:
+  record_selector:
+    css: ".agent-card, .team-member, .staff-card, .listing-card"
   fields:
-    - name: page_title
-      type: page_title
-    - name: listing_cards
-      selector: ".agent-card, .team-member, .staff-card"
-      many: true
-      default: []
-    - name: emails
-      type: emails
-      many: true
-      default: []
-    - name: phone_numbers
-      type: phone_numbers
-      many: true
-      default: []
+    - name: business_name
+      selector: ".listing-title, .agent-name, .team-member__name, h2, h3"
+    - name: website
+      selector: "a.website, a[href]"
+      attribute: "href"
+    - name: phone
+      selector: ".phone, a[href^='tel:']"
+    - name: city
+      selector: ".city"
+    - name: state
+      selector: ".state"
 
 output:
   root_dir: outputs
@@ -57,12 +56,14 @@ sync:
 schema:
   name: real_estate_agents
   columns:
+    - input_url
     - source_url
     - page_url
-    - page_title
-    - listing_cards
-    - emails
-    - phone_numbers
+    - business_name
+    - website
+    - phone
+    - city
+    - state
 
 metadata:
   audience: private

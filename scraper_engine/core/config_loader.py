@@ -54,6 +54,21 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized["output"].setdefault("root_dir", "outputs")
     normalized["output"].setdefault("merge_rows", normalized["mode"] == "site_scan")
     normalized["logging"].setdefault("file_name", "run.log")
+    if "record_selector" in normalized and "record_selector" not in normalized["extraction"]:
+        normalized["extraction"]["record_selector"] = normalized.pop("record_selector")
+    if "fields" in normalized and "fields" not in normalized["extraction"]:
+        normalized["extraction"]["fields"] = normalized.pop("fields")
+
+    record_selector = normalized["extraction"].get("record_selector")
+    if isinstance(record_selector, str):
+        normalized["extraction"]["record_selector"] = {"css": record_selector}
+
+    fields_payload = normalized["extraction"].get("fields", [])
+    if isinstance(fields_payload, dict):
+        normalized["extraction"]["fields"] = [
+            _normalize_dict_field_payload(field_name, field_payload)
+            for field_name, field_payload in fields_payload.items()
+        ]
 
     fields = normalized["extraction"].get("fields", [])
     normalized["extraction"]["fields"] = [
@@ -70,4 +85,18 @@ def _normalize_field_payload(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["type"] = "phones"
     if field_type == "email":
         normalized["type"] = "emails"
+    if "css" in normalized and "selector" not in normalized:
+        normalized["selector"] = normalized.pop("css")
+    if "attr" in normalized and "attribute" not in normalized:
+        normalized["attribute"] = normalized.pop("attr")
+    return normalized
+
+
+def _normalize_dict_field_payload(field_name: str, payload: Any) -> dict[str, Any]:
+    if isinstance(payload, str):
+        return {"name": field_name, "selector": payload}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Field '{field_name}' must be a string or object.")
+    normalized = dict(payload)
+    normalized["name"] = field_name
     return normalized

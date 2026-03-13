@@ -49,8 +49,14 @@ class ExtractorFieldConfig:
 
 
 @dataclass
+class RecordSelectorConfig:
+    css: str | None = None
+
+
+@dataclass
 class ExtractionConfig:
     fields: list[ExtractorFieldConfig] = field(default_factory=list)
+    record_selector: RecordSelectorConfig | None = None
 
 
 @dataclass
@@ -102,6 +108,7 @@ class EngineConfig:
             ExtractorFieldConfig(**field_payload)
             for field_payload in extraction.get("fields", [])
         ]
+        record_selector_payload = extraction.get("record_selector")
         return cls(
             name=payload["name"],
             mode=payload.get("mode", "site_scan"),
@@ -109,7 +116,12 @@ class EngineConfig:
             preset=payload.get("preset"),
             requests=RequestConfig(**payload.get("requests", {})),
             crawl=CrawlConfig(**payload.get("crawl", {})),
-            extraction=ExtractionConfig(fields=fields),
+            extraction=ExtractionConfig(
+                fields=fields,
+                record_selector=RecordSelectorConfig(**record_selector_payload)
+                if record_selector_payload
+                else None,
+            ),
             output=OutputConfig(**payload.get("output", {})),
             logging=LoggingConfig(**payload.get("logging", {})),
             sync=SyncConfig(**payload.get("sync", {})),
