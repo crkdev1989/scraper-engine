@@ -87,6 +87,18 @@ class NormalizationConfig:
 
 
 @dataclass
+class OutputShapingConfig:
+    include_fields: list[str] = field(default_factory=list)
+    exclude_fields: list[str] = field(default_factory=list)
+    field_order: list[str] = field(default_factory=list)
+    flatten_single_item_lists: bool = False
+    flatten_fields: list[str] = field(default_factory=list)
+    join_fields: dict[str, str] = field(default_factory=dict)
+    drop_empty_fields: bool = False
+    cleanup_common_fields: bool = False
+
+
+@dataclass
 class OutputConfig:
     root_dir: str = "outputs"
     merge_rows: bool = True
@@ -94,6 +106,7 @@ class OutputConfig:
     write_json: bool = True
     write_summary: bool = True
     write_report: bool = True
+    shaping: OutputShapingConfig = field(default_factory=OutputShapingConfig)
 
 
 @dataclass
@@ -140,6 +153,7 @@ class EngineConfig:
         record_selector_payload = extraction.get("record_selector")
         detail_page_payload = extraction.get("detail_page")
         pagination_payload = payload.get("pagination", {})
+        output_payload = payload.get("output", {})
         detail_page_fields = [
             ExtractorFieldConfig(**field_payload)
             for field_payload in (detail_page_payload or {}).get("fields", [])
@@ -172,7 +186,15 @@ class EngineConfig:
                 if pagination_payload.get("next_page")
                 else None,
             ),
-            output=OutputConfig(**payload.get("output", {})),
+            output=OutputConfig(
+                root_dir=output_payload.get("root_dir", "outputs"),
+                merge_rows=output_payload.get("merge_rows", True),
+                write_csv=output_payload.get("write_csv", True),
+                write_json=output_payload.get("write_json", True),
+                write_summary=output_payload.get("write_summary", True),
+                write_report=output_payload.get("write_report", True),
+                shaping=OutputShapingConfig(**output_payload.get("shaping", {})),
+            ),
             logging=LoggingConfig(**payload.get("logging", {})),
             sync=SyncConfig(**payload.get("sync", {})),
             schema=payload.get("schema", {}),

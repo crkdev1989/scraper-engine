@@ -5,7 +5,7 @@ import logging
 import re
 from typing import Any
 
-from scraper_engine.core.models import ExtractorFieldConfig, NormalizationConfig
+from scraper_engine.core.models import ExtractorFieldConfig, NormalizationConfig, OutputShapingConfig
 from scraper_engine.utils.logging_utils import log_event
 from scraper_engine.utils.text_utils import dedupe_preserve_order
 
@@ -31,6 +31,22 @@ class RecordPostProcessor:
             )
 
         return processed
+
+    def shape_record(
+        self,
+        record: dict[str, Any],
+        shaping: OutputShapingConfig,
+    ) -> dict[str, Any]:
+        cleaned_items: list[tuple[str, Any]] = []
+        for field_name, value in record.items():
+            cleaned_value = self._cleanup_output_value(field_name, value, shaping)
+            if shaping.drop_empty_fields and self._is_empty(cleaned_value):
+                continue
+            cleaned_items.append((field_name, cleaned_value))
+
+        filtered_items = self._apply_field_filters(cleaned_items, shaping)
+        ordered_items = self._apply_field_order(filtered_items, shaping)
+        return dict(ordered_items)
 
     def _process_field_value(
         self,
@@ -100,6 +116,93 @@ class RecordPostProcessor:
                 return None
             return value
         return value
+
+    def _cleanup_output_value(
+        self,
+        field_name: str,
+        value: Any,
+        shaping: OutputShapingConfig,
+    ) -> Any:
+        if isinstance(value, list):
+            cleaned_items = []
+            for item in value:
+                cleaned_item = self._cleanup_scalar_output_value(field_name, item, shaping)
+                if self._is_empty(cleaned_item):
+                    continue
+                cleaned_items.append(cleaned_item)
+
+            if all(isinstance(item, str) for item in cleaned_items):
+                cleaned_items = dedupe_preserve_order(cleaned_items)
+
+            if field_name in shaping.join_fields:
+                delimiter = shaping.join_fields[field_name]
+                return delimiter.join(str(item) for item in cleaned_items)
+            if field_name in shaping.flatten_fields and len(cleaned_items) == 1:
+                return cleaned_items[0]
+            if shaping.flatten_single_item_lists and len(cleaned_items) == 1:
+                return cleaned_items[0]
+            return cleaned_items
+
+        return self._cleanup_scalar_output_value(field_name, value, shaping)
+
+    def _cleanup_scalar_output_value(
+        self,
+        field_name: str,
+        value: Any,
+        shaping: OutputShapingConfig,
+    ) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        cleaned = value.strip()
+        if not shaping.cleanup_common_fields:
+            return cleaned
+
+        lowered_field_name = field_name.lower()
+        if "email" in lowered_field_name and cleaned.lower().startswith("mailto:"):
+            cleaned = cleaned[7:]
+        if any(token in lowered_field_name for token in ("phone", "phones", "tel")) and cleaned.lower().startswith("tel:"):
+            cleaned = cleaned[4:]
+        return cleaned
+
+    def _apply_field_filters(
+        self,
+        items: list[tuple[str, Any]],
+        shaping: OutputShapingConfig,
+    ) -> list[tuple[str, Any]]:
+        filtered = items
+        if shaping.include_fields:
+            include_set = set(shaping.include_fields)
+            filtered = [(key, value) for key, value in filtered if key in include_set]
+        if shaping.exclude_fields:
+            exclude_set = set(shaping.exclude_fields)
+            filtered = [(key, value) for key, value in filtered if key not in exclude_set]
+        return filtered
+
+    def _apply_field_order(
+        self,
+        items: list[tuple[str, Any]],
+        shaping: OutputShapingConfig,
+    ) -> list[tuple[str, Any]]:
+        if not shaping.field_order:
+            return items
+
+        item_map = {key: value for key, value in items}
+        ordered_items: list[tuple[str, Any]] = []
+        used_keys: set[str] = set()
+
+        for key in shaping.field_order:
+            if key in item_map:
+                ordered_items.append((key, item_map[key]))
+                used_keys.add(key)
+
+        for key, value in items:
+            if key not in used_keys:
+                ordered_items.append((key, value))
+        return ordered_items
+
+    def _is_empty(self, value: Any) -> bool:
+        return value in (None, "", [])
 
     def _apply_transform(
         self,

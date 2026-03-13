@@ -112,7 +112,8 @@ class JobRunner:
                     if self.logger:
                         self.logger.exception("Extraction failed for %s", page.url)
 
-            rows.extend(self.mapper.map_rows(target, page_payloads, config))
+            mapped_rows = self.mapper.map_rows(target, page_payloads, config)
+            rows.extend(self._shape_final_rows(mapped_rows, config))
             target_reports.append(
                 {
                     "target": target,
@@ -188,6 +189,7 @@ class JobRunner:
             target_errors = list(traversal["errors"])
             target_source_urls: list[str] = []
             target_rows = 0
+            target_output_rows: list[dict[str, Any]] = []
 
             pages_crawled += len(traversal["pages"])
             pages_visited += len(traversal["pages"])
@@ -213,7 +215,7 @@ class JobRunner:
                         config.extraction.fields,
                         config.normalization,
                     )
-                    rows.append(
+                    target_output_rows.append(
                         {
                             "input_url": target,
                             "source_url": page.url,
@@ -232,6 +234,7 @@ class JobRunner:
                     row_count=len(extracted_rows),
                 )
 
+            rows.extend(self._shape_final_rows(target_output_rows, config))
             target_reports.append(
                 {
                     "target": target,
@@ -311,6 +314,7 @@ class JobRunner:
             target_detail_failed = 0
             target_errors: list[str] = list(traversal["errors"])
             target_source_urls: list[str] = []
+            target_output_rows: list[dict[str, Any]] = []
 
             pages_crawled += len(traversal["pages"])
             pages_visited += len(traversal["pages"])
@@ -428,8 +432,9 @@ class JobRunner:
                             source_url=directory_page.url,
                         )
 
-                    rows.append(enriched_row)
+                    target_output_rows.append(enriched_row)
 
+            rows.extend(self._shape_final_rows(target_output_rows, config))
             target_reports.append(
                 {
                     "target": target,
@@ -646,3 +651,13 @@ class JobRunner:
             return normalize_url(str(raw_url))
         except ValueError:
             return None
+
+    def _shape_final_rows(
+        self,
+        rows: list[dict[str, Any]],
+        config: EngineConfig,
+    ) -> list[dict[str, Any]]:
+        return [
+            self.post_processor.shape_record(row, config.output.shaping)
+            for row in rows
+        ]

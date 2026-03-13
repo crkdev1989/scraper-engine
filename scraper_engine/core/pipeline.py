@@ -114,11 +114,7 @@ class Pipeline:
             "config_snapshot": config.to_dict(),
         }
 
-        preferred_columns = list(config.schema.get("columns", []))
-        if not preferred_columns:
-            preferred_columns = ["input_url", "source_url", "page_url", "status_code"]
-            preferred_columns.extend(field.name for field in config.extraction.fields)
-            preferred_columns.append("source_urls")
+        preferred_columns = self._resolve_preferred_columns(config, rows)
         if config.output.write_csv:
             write_csv(run_context.output_dir / "results.csv", rows, preferred_columns)
         if config.output.write_json:
@@ -164,3 +160,39 @@ class Pipeline:
         ):
             return config_path.parent.parent.parent / "outputs"
         return config_path.parent / "outputs"
+
+    def _resolve_preferred_columns(self, config, rows: list[dict[str, object]]) -> list[str]:
+        columns = list(config.schema.get("columns", []))
+        if not columns:
+            columns = ["input_url", "source_url", "page_url", "status_code"]
+            columns.extend(field.name for field in config.extraction.fields)
+            if config.extraction.detail_page is not None:
+                columns.extend(field.name for field in config.extraction.detail_page.fields)
+            columns.append("source_urls")
+
+        row_keys: list[str] = []
+        for row in rows:
+            for key in row.keys():
+                if key not in row_keys:
+                    row_keys.append(key)
+
+        if config.output.shaping.include_fields:
+            include_set = set(config.output.shaping.include_fields)
+            columns = [column for column in columns if column in include_set]
+            row_keys = [key for key in row_keys if key in include_set]
+        if config.output.shaping.exclude_fields:
+            exclude_set = set(config.output.shaping.exclude_fields)
+            columns = [column for column in columns if column not in exclude_set]
+            row_keys = [key for key in row_keys if key not in exclude_set]
+
+        for key in row_keys:
+            if key not in columns:
+                columns.append(key)
+
+        if config.output.shaping.field_order:
+            order = config.output.shaping.field_order
+            ordered = [column for column in order if column in columns]
+            ordered.extend(column for column in columns if column not in ordered)
+            columns = ordered
+
+        return columns

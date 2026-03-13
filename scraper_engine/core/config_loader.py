@@ -56,12 +56,18 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized["output"].setdefault("root_dir", "outputs")
     normalized["output"].setdefault("merge_rows", normalized["mode"] == "site_scan")
     normalized["logging"].setdefault("file_name", "run.log")
+    normalized["output"].setdefault("shaping", {})
     if "record_selector" in normalized and "record_selector" not in normalized["extraction"]:
         normalized["extraction"]["record_selector"] = normalized.pop("record_selector")
     if "fields" in normalized and "fields" not in normalized["extraction"]:
         normalized["extraction"]["fields"] = normalized.pop("fields")
     if "detail_page" in normalized and "detail_page" not in normalized["extraction"]:
         normalized["extraction"]["detail_page"] = normalized.pop("detail_page")
+    if "shaping" in normalized:
+        top_level_shaping = normalized.pop("shaping") or {}
+        merged_shaping = dict(top_level_shaping)
+        merged_shaping.update(normalized["output"].get("shaping", {}))
+        normalized["output"]["shaping"] = merged_shaping
 
     record_selector = normalized["extraction"].get("record_selector")
     if isinstance(record_selector, str):
@@ -86,6 +92,26 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
             next_page["attribute"] = next_page.pop("attr")
         next_page.setdefault("attribute", "href")
         pagination["next_page"] = next_page
+
+    shaping = normalized["output"].get("shaping", {})
+    shaping.setdefault("include_fields", [])
+    shaping.setdefault("exclude_fields", [])
+    shaping.setdefault("field_order", [])
+    shaping.setdefault("flatten_single_item_lists", False)
+    shaping.setdefault("flatten_fields", [])
+    shaping.setdefault("join_fields", {})
+    shaping.setdefault("drop_empty_fields", False)
+    shaping.setdefault("cleanup_common_fields", False)
+    if isinstance(shaping.get("join_fields"), list):
+        shaping["join_fields"] = {
+            field_name: "; "
+            for field_name in shaping["join_fields"]
+        }
+    elif isinstance(shaping.get("join_fields"), dict):
+        shaping["join_fields"] = {
+            field_name: (delimiter if delimiter is not None else "; ")
+            for field_name, delimiter in shaping["join_fields"].items()
+        }
 
     normalized["extraction"]["fields"] = _normalize_fields_collection(
         normalized["extraction"].get("fields", [])
