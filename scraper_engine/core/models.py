@@ -61,6 +61,19 @@ class DetailPageConfig:
 
 
 @dataclass
+class NextPageConfig:
+    css: str | None = None
+    attribute: str = "href"
+
+
+@dataclass
+class PaginationConfig:
+    enabled: bool = False
+    max_pages: int = 1
+    next_page: NextPageConfig | None = None
+
+
+@dataclass
 class ExtractionConfig:
     fields: list[ExtractorFieldConfig] = field(default_factory=list)
     record_selector: RecordSelectorConfig | None = None
@@ -102,6 +115,7 @@ class EngineConfig:
     requests: RequestConfig = field(default_factory=RequestConfig)
     crawl: CrawlConfig = field(default_factory=CrawlConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
+    pagination: PaginationConfig = field(default_factory=PaginationConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
@@ -118,6 +132,7 @@ class EngineConfig:
         ]
         record_selector_payload = extraction.get("record_selector")
         detail_page_payload = extraction.get("detail_page")
+        pagination_payload = payload.get("pagination", {})
         detail_page_fields = [
             ExtractorFieldConfig(**field_payload)
             for field_payload in (detail_page_payload or {}).get("fields", [])
@@ -140,6 +155,13 @@ class EngineConfig:
                     fields=detail_page_fields,
                 )
                 if detail_page_payload
+                else None,
+            ),
+            pagination=PaginationConfig(
+                enabled=pagination_payload.get("enabled", False),
+                max_pages=pagination_payload.get("max_pages", 1),
+                next_page=NextPageConfig(**pagination_payload["next_page"])
+                if pagination_payload.get("next_page")
                 else None,
             ),
             output=OutputConfig(**payload.get("output", {})),

@@ -50,6 +50,13 @@ extraction:
         many: true
         default: []
 
+pagination:
+  enabled: true
+  max_pages: 5
+  next_page:
+    css: "a.next, a[rel='next'], .pagination a.next"
+    attribute: "href"
+
 output:
   root_dir: outputs
   merge_rows: false

@@ -43,6 +43,7 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("requests", {})
     normalized.setdefault("crawl", {})
     normalized.setdefault("extraction", {})
+    normalized.setdefault("pagination", {})
     normalized.setdefault("output", {})
     normalized.setdefault("logging", {})
     normalized.setdefault("sync", {})
@@ -69,6 +70,21 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if detail_page is not None:
         detail_page.setdefault("enabled", True)
         detail_page.setdefault("fields", [])
+
+    pagination = normalized.get("pagination", {})
+    pagination.setdefault("enabled", False)
+    pagination.setdefault("max_pages", 1)
+    next_page = pagination.get("next_page")
+    if isinstance(next_page, str):
+        pagination["next_page"] = {"css": next_page, "attribute": "href"}
+    elif isinstance(next_page, dict):
+        next_page = dict(next_page)
+        if "css" not in next_page and "selector" in next_page:
+            next_page["css"] = next_page.pop("selector")
+        if "attribute" not in next_page and "attr" in next_page:
+            next_page["attribute"] = next_page.pop("attr")
+        next_page.setdefault("attribute", "href")
+        pagination["next_page"] = next_page
 
     normalized["extraction"]["fields"] = _normalize_fields_collection(
         normalized["extraction"].get("fields", [])
