@@ -46,6 +46,7 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("normalization", {})
     normalized.setdefault("pagination", {})
     normalized.setdefault("output", {})
+    normalized.setdefault("limits", {})
     normalized.setdefault("logging", {})
     normalized.setdefault("sync", {})
     normalized.setdefault("schema", {})
@@ -57,6 +58,8 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized["output"].setdefault("merge_rows", normalized["mode"] == "site_scan")
     normalized["logging"].setdefault("file_name", "run.log")
     normalized["output"].setdefault("shaping", {})
+    normalized["limits"].setdefault("max_records", None)
+    normalized["limits"].setdefault("max_detail_pages", None)
     if "record_selector" in normalized and "record_selector" not in normalized["extraction"]:
         normalized["extraction"]["record_selector"] = normalized.pop("record_selector")
     if "fields" in normalized and "fields" not in normalized["extraction"]:
@@ -112,6 +115,11 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
             field_name: (delimiter if delimiter is not None else "; ")
             for field_name, delimiter in shaping["join_fields"].items()
         }
+
+    for limit_key in ("max_records", "max_detail_pages"):
+        limit_value = normalized["limits"].get(limit_key)
+        if limit_value is not None and int(limit_value) <= 0:
+            normalized["limits"][limit_key] = None
 
     normalized["extraction"]["fields"] = _normalize_fields_collection(
         normalized["extraction"].get("fields", [])

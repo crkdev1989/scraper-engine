@@ -111,6 +111,7 @@ class Pipeline:
             "errors": runner_report["errors"],
             "targets": runner_report["targets"],
             "diagnostics": runner_report.get("diagnostics", {}),
+            "limits": runner_report.get("limits", {}),
             "sync_attempted": bool(sync_result.get("attempted")),
             "sync_success": bool(sync_result.get("success")),
             "sync_result": sync_result,

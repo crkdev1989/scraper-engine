@@ -57,6 +57,7 @@ class JobRunner:
         notes: list[str] = []
         errors: list[str] = []
         diagnostics = self._new_diagnostics()
+        limits_state = self._new_limits_state(config)
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -124,6 +125,15 @@ class JobRunner:
                         self.logger.exception("Extraction failed for %s", page.url)
 
             mapped_rows = self.mapper.map_rows(target, page_payloads, config)
+            mapped_rows = self._cap_records(
+                mapped_rows,
+                current_count=len(rows),
+                config=config,
+                limits_state=limits_state,
+                diagnostics=diagnostics,
+                notes=notes,
+                context=f"site_scan target {target}",
+            )
             rows.extend(self._shape_final_rows(mapped_rows, config))
             target_reports.append(
                 {
@@ -150,6 +160,8 @@ class JobRunner:
                 pages_succeeded=target_pages_succeeded,
                 pages_failed=target_pages_failed,
             )
+            if self._max_records_reached(limits_state):
+                break
 
         report = {
             "target_count": len(targets),
@@ -170,6 +182,7 @@ class JobRunner:
             "notes": notes,
             "errors": errors,
             "diagnostics": self._merge_diagnostics(diagnostics),
+            "limits": self._build_limits_report(config, limits_state),
         }
         return rows, report
 
@@ -184,6 +197,7 @@ class JobRunner:
         notes: list[str] = []
         errors: list[str] = []
         diagnostics = self._new_diagnostics()
+        limits_state = self._new_limits_state(config)
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -228,6 +242,15 @@ class JobRunner:
                     page_url=page.url,
                     extraction_config=config.extraction,
                 )
+                extracted_rows = self._cap_records(
+                    extracted_rows,
+                    current_count=len(rows) + len(target_output_rows),
+                    config=config,
+                    limits_state=limits_state,
+                    diagnostics=diagnostics,
+                    notes=notes,
+                    context=f"directory_list page {page.url}",
+                )
                 for record in extracted_rows:
                     record = self.post_processor.process_record(
                         record,
@@ -252,6 +275,8 @@ class JobRunner:
                     source_url=page.url,
                     row_count=len(extracted_rows),
                 )
+                if self._max_records_reached(limits_state):
+                    break
 
             rows.extend(self._shape_final_rows(target_output_rows, config))
             target_reports.append(
@@ -274,6 +299,8 @@ class JobRunner:
                 f"Extracted {target_rows} listing record(s) from {len(traversal['pages'])} "
                 f"directory page(s) for {target}; stop_reason={traversal['stop_reason']}."
             )
+            if self._max_records_reached(limits_state):
+                break
 
         report = {
             "target_count": len(targets),
@@ -294,6 +321,7 @@ class JobRunner:
             "notes": notes,
             "errors": errors,
             "diagnostics": self._merge_diagnostics(diagnostics),
+            "limits": self._build_limits_report(config, limits_state),
         }
         return rows, report
 
@@ -308,6 +336,7 @@ class JobRunner:
         notes: list[str] = []
         errors: list[str] = []
         diagnostics = self._new_diagnostics()
+        limits_state = self._new_limits_state(config)
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -361,6 +390,15 @@ class JobRunner:
                     page_url=directory_page.url,
                     extraction_config=config.extraction,
                 )
+                base_rows = self._cap_records(
+                    base_rows,
+                    current_count=len(rows) + len(target_output_rows),
+                    config=config,
+                    limits_state=limits_state,
+                    diagnostics=diagnostics,
+                    notes=notes,
+                    context=f"directory_detail page {directory_page.url}",
+                )
                 target_listing_count += len(base_rows)
                 listing_count += len(base_rows)
 
@@ -382,84 +420,98 @@ class JobRunner:
                         detail_page_config,
                     )
                     if detail_url_value:
-                        detail_pages_attempted += 1
-                        target_detail_attempted += 1
-                        detail_page, page_number_counter = self._fetch_page_with_storage(
-                            detail_url_value,
-                            run_context,
-                            page_number_counter,
-                        )
-                        pages_crawled += 1
-
-                        if detail_page.error:
-                            detail_pages_failed += 1
-                            target_detail_failed += 1
-                            pages_failed += 1
-                            target_errors.append(f"{detail_page.url}: {detail_page.error}")
+                        if self._detail_page_limit_reached(config, detail_pages_attempted):
+                            limits_state["detail_pages_skipped_due_to_limit"] += 1
+                            self._mark_detail_page_limit_hit(
+                                config,
+                                limits_state,
+                                diagnostics,
+                                notes,
+                            )
                             self._record_diagnostic(
                                 diagnostics,
-                                "detail_page_fetch_failed",
-                                f"{detail_page.url}: {detail_page.error}",
-                            )
-                            log_event(
-                                self.logger,
-                                logging.WARNING,
-                                "DETAIL ENRICH",
-                                "Detail page fetch failed; preserving base record.",
-                                source_url=directory_page.url,
-                                detail_url=detail_url_value,
-                                error=detail_page.error,
+                                "detail_page_limit_skipped",
+                                "Detail page fetch skipped because max_detail_pages was reached.",
                             )
                         else:
-                            try:
-                                detail_fields = self.directory_detail_extractor.extract_detail_fields(
-                                    html=detail_page.html or "",
-                                    page_url=detail_page.url,
-                                    detail_page_config=detail_page_config,
-                                )
-                                detail_fields = self.post_processor.process_record(
-                                    detail_fields,
-                                    detail_page_config.fields,
-                                    config.normalization,
-                                )
-                                enriched_row = self.directory_detail_extractor.merge_detail_fields(
-                                    enriched_row,
-                                    detail_fields,
-                                    detail_page.url,
-                                )
-                                detail_pages_successful += 1
-                                target_detail_successful += 1
-                                pages_succeeded += 1
-                                log_event(
-                                    self.logger,
-                                    logging.INFO,
-                                    "DETAIL ENRICH",
-                                    "Merged detail page fields into listing record.",
-                                    source_url=directory_page.url,
-                                    detail_url=detail_page.url,
-                                    field_count=len(detail_fields),
-                                )
-                            except Exception as error:
+                            detail_pages_attempted += 1
+                            target_detail_attempted += 1
+                            detail_page, page_number_counter = self._fetch_page_with_storage(
+                                detail_url_value,
+                                run_context,
+                                page_number_counter,
+                            )
+                            pages_crawled += 1
+
+                            if detail_page.error:
                                 detail_pages_failed += 1
                                 target_detail_failed += 1
                                 pages_failed += 1
-                                target_errors.append(
-                                    f"{detail_page.url}: detail extraction error: {error}"
-                                )
+                                target_errors.append(f"{detail_page.url}: {detail_page.error}")
                                 self._record_diagnostic(
                                     diagnostics,
-                                    "detail_field_extraction_failed",
-                                    f"{detail_page.url}: detail extraction error: {error}",
+                                    "detail_page_fetch_failed",
+                                    f"{detail_page.url}: {detail_page.error}",
                                 )
                                 log_event(
                                     self.logger,
                                     logging.WARNING,
                                     "DETAIL ENRICH",
-                                    "Detail extraction failed; preserving base record.",
+                                    "Detail page fetch failed; preserving base record.",
                                     source_url=directory_page.url,
-                                    detail_url=detail_page.url,
-                                    error=error,
+                                    detail_url=detail_url_value,
+                                    error=detail_page.error,
                                 )
+                            else:
+                                try:
+                                    detail_fields = self.directory_detail_extractor.extract_detail_fields(
+                                        html=detail_page.html or "",
+                                        page_url=detail_page.url,
+                                        detail_page_config=detail_page_config,
+                                    )
+                                    detail_fields = self.post_processor.process_record(
+                                        detail_fields,
+                                        detail_page_config.fields,
+                                        config.normalization,
+                                    )
+                                    enriched_row = self.directory_detail_extractor.merge_detail_fields(
+                                        enriched_row,
+                                        detail_fields,
+                                        detail_page.url,
+                                    )
+                                    detail_pages_successful += 1
+                                    target_detail_successful += 1
+                                    pages_succeeded += 1
+                                    log_event(
+                                        self.logger,
+                                        logging.INFO,
+                                        "DETAIL ENRICH",
+                                        "Merged detail page fields into listing record.",
+                                        source_url=directory_page.url,
+                                        detail_url=detail_page.url,
+                                        field_count=len(detail_fields),
+                                    )
+                                except Exception as error:
+                                    detail_pages_failed += 1
+                                    target_detail_failed += 1
+                                    pages_failed += 1
+                                    target_errors.append(
+                                        f"{detail_page.url}: detail extraction error: {error}"
+                                    )
+                                    self._record_diagnostic(
+                                        diagnostics,
+                                        "detail_field_extraction_failed",
+                                        f"{detail_page.url}: detail extraction error: {error}",
+                                    )
+                                    log_event(
+                                        self.logger,
+                                        logging.WARNING,
+                                        "DETAIL ENRICH",
+                                        "Detail extraction failed; preserving base record.",
+                                        source_url=directory_page.url,
+                                        detail_url=detail_page.url,
+                                        error=error,
+                                    )
                     else:
                         log_event(
                             self.logger,
@@ -470,6 +522,8 @@ class JobRunner:
                         )
 
                     target_output_rows.append(enriched_row)
+                if self._max_records_reached(limits_state):
+                    break
 
             rows.extend(self._shape_final_rows(target_output_rows, config))
             target_reports.append(
@@ -509,6 +563,8 @@ class JobRunner:
                 detail_pages_successful=target_detail_successful,
                 detail_pages_failed=target_detail_failed,
             )
+            if self._max_records_reached(limits_state):
+                break
 
         report = {
             "target_count": len(targets),
@@ -532,6 +588,7 @@ class JobRunner:
             "notes": notes,
             "errors": errors,
             "diagnostics": self._merge_diagnostics(diagnostics),
+            "limits": self._build_limits_report(config, limits_state),
         }
         return rows, report
 
@@ -739,3 +796,123 @@ class JobRunner:
             for message, count in issue_messages[:10]
         ]
         return merged
+
+    def _new_limits_state(self, config: EngineConfig) -> dict[str, Any]:
+        return {
+            "max_records": config.limits.max_records,
+            "max_detail_pages": config.limits.max_detail_pages,
+            "max_records_hit": False,
+            "max_detail_pages_hit": False,
+            "records_truncated": 0,
+            "detail_pages_skipped_due_to_limit": 0,
+        }
+
+    def _cap_records(
+        self,
+        records: list[dict[str, Any]],
+        current_count: int,
+        config: EngineConfig,
+        limits_state: dict[str, Any],
+        diagnostics: dict[str, Any],
+        notes: list[str],
+        context: str,
+    ) -> list[dict[str, Any]]:
+        max_records = config.limits.max_records
+        if max_records is None:
+            return records
+
+        remaining = max_records - current_count
+        if remaining <= 0:
+            limits_state["records_truncated"] += len(records)
+            self._mark_max_records_hit(config, limits_state, diagnostics, notes, context)
+            return []
+
+        if len(records) <= remaining:
+            return records
+
+        limits_state["records_truncated"] += len(records) - remaining
+        self._mark_max_records_hit(config, limits_state, diagnostics, notes, context)
+        return records[:remaining]
+
+    def _mark_max_records_hit(
+        self,
+        config: EngineConfig,
+        limits_state: dict[str, Any],
+        diagnostics: dict[str, Any],
+        notes: list[str],
+        context: str,
+    ) -> None:
+        self._record_diagnostic(
+            diagnostics,
+            "max_records_reached",
+            f"Record output was capped at {config.limits.max_records} during {context}.",
+        )
+        if limits_state["max_records_hit"]:
+            return
+
+        limits_state["max_records_hit"] = True
+        notes.append(
+            f"Record output capped at {config.limits.max_records}; additional records were skipped."
+        )
+        log_event(
+            self.logger,
+            logging.WARNING,
+            "RUN LIMIT",
+            "Reached configured max_records limit.",
+            max_records=config.limits.max_records,
+            context=context,
+        )
+
+    def _detail_page_limit_reached(
+        self,
+        config: EngineConfig,
+        detail_pages_attempted: int,
+    ) -> bool:
+        max_detail_pages = config.limits.max_detail_pages
+        if max_detail_pages is None:
+            return False
+        return detail_pages_attempted >= max_detail_pages
+
+    def _mark_detail_page_limit_hit(
+        self,
+        config: EngineConfig,
+        limits_state: dict[str, Any],
+        diagnostics: dict[str, Any],
+        notes: list[str],
+    ) -> None:
+        if limits_state["max_detail_pages_hit"]:
+            return
+
+        limits_state["max_detail_pages_hit"] = True
+        notes.append(
+            "Detail page enrichment was capped by max_detail_pages; remaining rows kept base fields only."
+        )
+        log_event(
+            self.logger,
+            logging.WARNING,
+            "RUN LIMIT",
+            "Reached configured max_detail_pages limit.",
+            max_detail_pages=config.limits.max_detail_pages,
+        )
+        self._record_diagnostic(
+            diagnostics,
+            "max_detail_pages_reached",
+            f"Detail page enrichment was capped at {config.limits.max_detail_pages}.",
+        )
+
+    def _max_records_reached(self, limits_state: dict[str, Any]) -> bool:
+        return bool(limits_state["max_records_hit"])
+
+    def _build_limits_report(
+        self,
+        config: EngineConfig,
+        limits_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "max_records": config.limits.max_records,
+            "max_detail_pages": config.limits.max_detail_pages,
+            "max_records_hit": limits_state["max_records_hit"],
+            "max_detail_pages_hit": limits_state["max_detail_pages_hit"],
+            "records_truncated": limits_state["records_truncated"],
+            "detail_pages_skipped_due_to_limit": limits_state["detail_pages_skipped_due_to_limit"],
+        }

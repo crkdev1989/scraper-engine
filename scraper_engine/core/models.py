@@ -110,6 +110,12 @@ class OutputConfig:
 
 
 @dataclass
+class RunLimitsConfig:
+    max_records: int | None = None
+    max_detail_pages: int | None = None
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     file_name: str = "run.log"
@@ -137,6 +143,7 @@ class EngineConfig:
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     pagination: PaginationConfig = field(default_factory=PaginationConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    limits: RunLimitsConfig = field(default_factory=RunLimitsConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     schema: dict[str, Any] = field(default_factory=dict)
@@ -154,6 +161,7 @@ class EngineConfig:
         detail_page_payload = extraction.get("detail_page")
         pagination_payload = payload.get("pagination", {})
         output_payload = payload.get("output", {})
+        limits_payload = payload.get("limits", {})
         detail_page_fields = [
             ExtractorFieldConfig(**field_payload)
             for field_payload in (detail_page_payload or {}).get("fields", [])
@@ -195,6 +203,7 @@ class EngineConfig:
                 write_report=output_payload.get("write_report", True),
                 shaping=OutputShapingConfig(**output_payload.get("shaping", {})),
             ),
+            limits=RunLimitsConfig(**limits_payload),
             logging=LoggingConfig(**payload.get("logging", {})),
             sync=SyncConfig(**payload.get("sync", {})),
             schema=payload.get("schema", {}),
