@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from datetime import datetime, timezone
+from typing import Any
 
 from scraper_engine.core.config_loader import load_config
 from scraper_engine.core.job_runner import JobRunner
@@ -108,11 +110,19 @@ class Pipeline:
             "notes": runner_report["notes"],
             "errors": runner_report["errors"],
             "targets": runner_report["targets"],
+            "diagnostics": runner_report.get("diagnostics", {}),
             "sync_attempted": bool(sync_result.get("attempted")),
             "sync_success": bool(sync_result.get("success")),
             "sync_result": sync_result,
             "config_snapshot": config.to_dict(),
         }
+        report["diagnostics"]["pagination_stop_reason_counts"] = dict(
+            sorted(Counter(report.get("pagination_stopped_reasons", [])).items())
+        )
+        report["quality_metrics"] = self._build_quality_metrics(
+            rows,
+            runner_report["extracted_field_names"],
+        )
 
         preferred_columns = self._resolve_preferred_columns(config, rows)
         if config.output.write_csv:
@@ -196,3 +206,46 @@ class Pipeline:
             columns = ordered
 
         return columns
+
+    def _build_quality_metrics(
+        self,
+        rows: list[dict[str, Any]],
+        configured_fields: list[str],
+    ) -> dict[str, Any]:
+        record_count = len(rows)
+        final_output_fields_seen: list[str] = []
+        for row in rows:
+            for key in row.keys():
+                if key not in final_output_fields_seen:
+                    final_output_fields_seen.append(key)
+
+        field_coverage: dict[str, dict[str, Any]] = {}
+        for field_name in configured_fields:
+            filled = sum(1 for row in rows if not self._is_empty(row.get(field_name)))
+            empty = max(0, record_count - filled)
+            field_coverage[field_name] = {
+                "filled": filled,
+                "empty": empty,
+                "fill_rate": round((filled / record_count), 3) if record_count else 0.0,
+                "empty_rate": round((empty / record_count), 3) if record_count else 0.0,
+            }
+
+        records_with_all_configured_fields_empty = 0
+        if configured_fields:
+            records_with_all_configured_fields_empty = sum(
+                1
+                for row in rows
+                if all(self._is_empty(row.get(field_name)) for field_name in configured_fields)
+            )
+
+        return {
+            "records_produced": record_count,
+            "configured_field_count": len(configured_fields),
+            "configured_fields": list(configured_fields),
+            "final_output_fields_seen": final_output_fields_seen,
+            "records_with_all_configured_fields_empty": records_with_all_configured_fields_empty,
+            "configured_field_coverage": field_coverage,
+        }
+
+    def _is_empty(self, value: Any) -> bool:
+        return value in (None, "", [])

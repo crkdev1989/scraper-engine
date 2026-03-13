@@ -13,6 +13,20 @@ from scraper_engine.utils.text_utils import dedupe_preserve_order
 class RecordPostProcessor:
     def __init__(self, logger=None) -> None:
         self.logger = logger
+        self._diagnostics = {
+            "warning_total": 0,
+            "warning_counts_by_category": {},
+            "warning_counts_by_field": {},
+            "warning_message_counts": {},
+            "cleanup_actions": {
+                "list_items_dropped": 0,
+                "duplicate_list_items_removed": 0,
+                "fields_flattened": 0,
+                "fields_joined": 0,
+                "mailto_prefix_removed": 0,
+                "tel_prefix_removed": 0,
+            },
+        }
 
     def process_record(
         self,
@@ -47,6 +61,28 @@ class RecordPostProcessor:
         filtered_items = self._apply_field_filters(cleaned_items, shaping)
         ordered_items = self._apply_field_order(filtered_items, shaping)
         return dict(ordered_items)
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        warning_messages = sorted(
+            self._diagnostics["warning_message_counts"].items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return {
+            "warning_total": self._diagnostics["warning_total"],
+            "warning_counts_by_category": dict(
+                sorted(self._diagnostics["warning_counts_by_category"].items())
+            ),
+            "warning_counts_by_field": dict(
+                sorted(self._diagnostics["warning_counts_by_field"].items())
+            ),
+            "warning_messages": [
+                {"message": message, "count": count}
+                for message, count in warning_messages[:10]
+            ],
+            "cleanup_actions": dict(
+                sorted(self._diagnostics["cleanup_actions"].items())
+            ),
+        }
 
     def _process_field_value(
         self,
@@ -124,6 +160,7 @@ class RecordPostProcessor:
         shaping: OutputShapingConfig,
     ) -> Any:
         if isinstance(value, list):
+            original_count = len(value)
             cleaned_items = []
             for item in value:
                 cleaned_item = self._cleanup_scalar_output_value(field_name, item, shaping)
@@ -131,15 +168,27 @@ class RecordPostProcessor:
                     continue
                 cleaned_items.append(cleaned_item)
 
+            dropped_items = original_count - len(cleaned_items)
+            if dropped_items > 0:
+                self._increment_cleanup("list_items_dropped", dropped_items)
+
             if all(isinstance(item, str) for item in cleaned_items):
+                dedupe_input_count = len(cleaned_items)
                 cleaned_items = dedupe_preserve_order(cleaned_items)
+                dedupe_removed = dedupe_input_count - len(cleaned_items)
+                if dedupe_removed > 0:
+                    self._increment_cleanup("duplicate_list_items_removed", dedupe_removed)
 
             if field_name in shaping.join_fields:
                 delimiter = shaping.join_fields[field_name]
+                if cleaned_items:
+                    self._increment_cleanup("fields_joined")
                 return delimiter.join(str(item) for item in cleaned_items)
             if field_name in shaping.flatten_fields and len(cleaned_items) == 1:
+                self._increment_cleanup("fields_flattened")
                 return cleaned_items[0]
             if shaping.flatten_single_item_lists and len(cleaned_items) == 1:
+                self._increment_cleanup("fields_flattened")
                 return cleaned_items[0]
             return cleaned_items
 
@@ -161,8 +210,10 @@ class RecordPostProcessor:
         lowered_field_name = field_name.lower()
         if "email" in lowered_field_name and cleaned.lower().startswith("mailto:"):
             cleaned = cleaned[7:]
+            self._increment_cleanup("mailto_prefix_removed")
         if any(token in lowered_field_name for token in ("phone", "phones", "tel")) and cleaned.lower().startswith("tel:"):
             cleaned = cleaned[4:]
+            self._increment_cleanup("tel_prefix_removed")
         return cleaned
 
     def _apply_field_filters(
@@ -272,6 +323,13 @@ class RecordPostProcessor:
         return None
 
     def _warn_transform_issue(self, field_name: str, message: str) -> None:
+        self._diagnostics["warning_total"] += 1
+        self._increment_count(self._diagnostics["warning_counts_by_category"], "field_transform")
+        self._increment_count(self._diagnostics["warning_counts_by_field"], field_name)
+        self._increment_count(
+            self._diagnostics["warning_message_counts"],
+            f"{field_name}: {message}",
+        )
         log_event(
             self.logger,
             logging.WARNING,
@@ -279,3 +337,14 @@ class RecordPostProcessor:
             message,
             field=field_name,
         )
+
+    def _increment_cleanup(self, key: str, amount: int = 1) -> None:
+        self._increment_count(self._diagnostics["cleanup_actions"], key, amount)
+
+    def _increment_count(
+        self,
+        container: dict[str, int],
+        key: str,
+        amount: int = 1,
+    ) -> None:
+        container[key] = container.get(key, 0) + amount

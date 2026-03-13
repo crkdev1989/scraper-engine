@@ -56,6 +56,7 @@ class JobRunner:
         target_reports: list[dict[str, Any]] = []
         notes: list[str] = []
         errors: list[str] = []
+        diagnostics = self._new_diagnostics()
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -72,6 +73,11 @@ class JobRunner:
                 if page.error:
                     pages_failed += 1
                     target_pages_failed += 1
+                    self._record_diagnostic(
+                        diagnostics,
+                        "page_fetch_failed",
+                        f"{page.url}: {page.error}",
+                    )
                     continue
 
                 try:
@@ -109,6 +115,11 @@ class JobRunner:
                     pages_failed += 1
                     target_pages_failed += 1
                     errors.append(f"{page.url}: extraction error: {error}")
+                    self._record_diagnostic(
+                        diagnostics,
+                        "page_extraction_failed",
+                        f"{page.url}: extraction error: {error}",
+                    )
                     if self.logger:
                         self.logger.exception("Extraction failed for %s", page.url)
 
@@ -158,6 +169,7 @@ class JobRunner:
             "targets": target_reports,
             "notes": notes,
             "errors": errors,
+            "diagnostics": self._merge_diagnostics(diagnostics),
         }
         return rows, report
 
@@ -171,6 +183,7 @@ class JobRunner:
         target_reports: list[dict[str, Any]] = []
         notes: list[str] = []
         errors: list[str] = []
+        diagnostics = self._new_diagnostics()
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -185,6 +198,7 @@ class JobRunner:
                 config.pagination,
                 run_context,
                 page_number_counter,
+                diagnostics=diagnostics,
             )
             target_errors = list(traversal["errors"])
             target_source_urls: list[str] = []
@@ -200,6 +214,11 @@ class JobRunner:
                 if page.error:
                     pages_failed += 1
                     target_errors.append(f"{page.url}: {page.error}")
+                    self._record_diagnostic(
+                        diagnostics,
+                        "directory_page_fetch_failed",
+                        f"{page.url}: {page.error}",
+                    )
                     continue
 
                 pages_succeeded += 1
@@ -274,6 +293,7 @@ class JobRunner:
             "targets": target_reports,
             "notes": notes,
             "errors": errors,
+            "diagnostics": self._merge_diagnostics(diagnostics),
         }
         return rows, report
 
@@ -287,6 +307,7 @@ class JobRunner:
         target_reports: list[dict[str, Any]] = []
         notes: list[str] = []
         errors: list[str] = []
+        diagnostics = self._new_diagnostics()
         pages_crawled = 0
         pages_succeeded = 0
         pages_failed = 0
@@ -307,6 +328,7 @@ class JobRunner:
                 config.pagination,
                 run_context,
                 page_number_counter,
+                diagnostics=diagnostics,
             )
             target_listing_count = 0
             target_detail_attempted = 0
@@ -325,6 +347,11 @@ class JobRunner:
                 if directory_page.error:
                     pages_failed += 1
                     target_errors.append(f"{directory_page.url}: {directory_page.error}")
+                    self._record_diagnostic(
+                        diagnostics,
+                        "directory_page_fetch_failed",
+                        f"{directory_page.url}: {directory_page.error}",
+                    )
                     continue
 
                 pages_succeeded += 1
@@ -369,6 +396,11 @@ class JobRunner:
                             target_detail_failed += 1
                             pages_failed += 1
                             target_errors.append(f"{detail_page.url}: {detail_page.error}")
+                            self._record_diagnostic(
+                                diagnostics,
+                                "detail_page_fetch_failed",
+                                f"{detail_page.url}: {detail_page.error}",
+                            )
                             log_event(
                                 self.logger,
                                 logging.WARNING,
@@ -413,6 +445,11 @@ class JobRunner:
                                 pages_failed += 1
                                 target_errors.append(
                                     f"{detail_page.url}: detail extraction error: {error}"
+                                )
+                                self._record_diagnostic(
+                                    diagnostics,
+                                    "detail_field_extraction_failed",
+                                    f"{detail_page.url}: detail extraction error: {error}",
                                 )
                                 log_event(
                                     self.logger,
@@ -494,6 +531,7 @@ class JobRunner:
             "targets": target_reports,
             "notes": notes,
             "errors": errors,
+            "diagnostics": self._merge_diagnostics(diagnostics),
         }
         return rows, report
 
@@ -528,6 +566,7 @@ class JobRunner:
         pagination_config: PaginationConfig,
         run_context: RunContext,
         page_number_counter: int,
+        diagnostics: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], int]:
         pages: list[CrawlPage] = []
         pagination_urls_followed: list[str] = []
@@ -586,6 +625,12 @@ class JobRunner:
                 normalized_next_page_url = normalize_url(next_page_url)
             except ValueError as error:
                 errors.append(f"{page.url}: invalid next page url: {error}")
+                if diagnostics is not None:
+                    self._record_diagnostic(
+                        diagnostics,
+                        "invalid_next_page_url",
+                        f"{page.url}: invalid next page url: {error}",
+                    )
                 stop_reason = "invalid_next_page_url"
                 break
 
@@ -661,3 +706,36 @@ class JobRunner:
             self.post_processor.shape_record(row, config.output.shaping)
             for row in rows
         ]
+
+    def _new_diagnostics(self) -> dict[str, Any]:
+        return {
+            "non_fatal_issue_counts": {},
+            "non_fatal_issue_messages": {},
+        }
+
+    def _record_diagnostic(
+        self,
+        diagnostics: dict[str, Any],
+        category: str,
+        message: str,
+    ) -> None:
+        issue_counts = diagnostics["non_fatal_issue_counts"]
+        issue_counts[category] = issue_counts.get(category, 0) + 1
+
+        issue_messages = diagnostics["non_fatal_issue_messages"]
+        issue_messages[message] = issue_messages.get(message, 0) + 1
+
+    def _merge_diagnostics(self, diagnostics: dict[str, Any]) -> dict[str, Any]:
+        issue_messages = sorted(
+            diagnostics["non_fatal_issue_messages"].items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        merged = dict(self.post_processor.get_diagnostics())
+        merged["non_fatal_issue_counts"] = dict(
+            sorted(diagnostics["non_fatal_issue_counts"].items())
+        )
+        merged["non_fatal_issue_messages"] = [
+            {"message": message, "count": count}
+            for message, count in issue_messages[:10]
+        ]
+        return merged
