@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -16,12 +18,24 @@ class JobSubmissionRequest(BaseModel):
     run_name: str | None = None
 
 
+def _get_cors_origins_from_env() -> list[str]:
+    configured = os.getenv("SCRAPER_ENGINE_CORS_ORIGINS", "").strip()
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    return [
+        "https://scraper.crkdev.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+
 def create_app(
     *,
     public_config_root: Path | None = None,
     output_root: Path | None = None,
     pipeline_runner=None,
     run_jobs_inline: bool = False,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
     repo_root = Path(__file__).resolve().parent.parent
     service = HostedJobService(
@@ -33,6 +47,15 @@ def create_app(
 
     app = FastAPI(title="scraper-engine hosted backend", version="0.1.0")
     app.state.hosted_service = service
+    allowed_origins = cors_origins if cors_origins is not None else _get_cors_origins_from_env()
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
 
     @app.get("/api/capabilities")
     def get_capabilities() -> dict[str, Any]:
@@ -41,6 +64,14 @@ def create_app(
     @app.get("/api/presets")
     def get_presets() -> dict[str, Any]:
         return {"presets": service.list_presets()}
+
+    @app.get("/api/limits")
+    def get_limits() -> dict[str, Any]:
+        return service.limits()
+
+    @app.get("/health")
+    def get_health() -> dict[str, Any]:
+        return {"status": "ok"}
 
     @app.post("/api/jobs", status_code=202)
     def submit_job(payload: JobSubmissionRequest) -> dict[str, Any]:
@@ -67,6 +98,10 @@ def create_app(
         except HostedServiceError as error:
             raise HTTPException(status_code=error.status_code, detail=error.to_failure()) from error
         return FileResponse(path=file_path, filename=file_name)
+
+    @app.get("/api/jobs/{job_id}/download/{file_name}")
+    def download_file_compat(job_id: str, file_name: str):
+        return download_file(job_id, file_name)
 
     return app
 

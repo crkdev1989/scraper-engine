@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -80,6 +81,20 @@ class HostedJobService:
             "allowed_presets": presets,
             "job_statuses": ["queued", "running", "completed", "failed"],
             "downloadable_files": list(PUBLIC_OUTPUT_FILES),
+        }
+
+    def limits(self) -> dict[str, Any]:
+        presets = self.list_presets()
+        return {
+            "allowed_presets": [preset["preset"] for preset in presets],
+            "presets": [
+                {
+                    "preset": preset["preset"],
+                    "mode": preset["mode"],
+                    "limits": preset["limits"],
+                }
+                for preset in presets
+            ],
         }
 
     def list_presets(self) -> list[dict[str, Any]]:
@@ -166,8 +181,7 @@ class HostedJobService:
                 message="The requested job ID does not exist.",
                 suggestion="Submit a new job and use the returned job ID.",
             )
-        metadata["files"] = self._materialize_download_paths(job_id, metadata.get("files", {}))
-        return metadata
+        return self._build_job_response(job_id, metadata)
 
     def get_download_path(self, job_id: str, file_name: str) -> Path:
         if file_name not in PUBLIC_OUTPUT_FILES:
@@ -338,14 +352,14 @@ class HostedJobService:
             )
         if any(token in errors for token in ("cloudflare", "captcha", "403", "429", "forbidden", "blocked")):
             return self._failure_payload(
-                reason="blocking_or_anti_bot",
+                reason="blocked_by_site",
                 message="The target site appears to be blocking automated requests.",
                 suggestion="Try a different site or contact CRK Dev for a custom scraping solution.",
                 help_message=ADVANCED_HELP_MESSAGE,
             )
         if any(token in errors for token in ("timed out", "timeout")):
             return self._failure_payload(
-                reason="fetch_timeout",
+                reason="timeout",
                 message="The request timed out before the hosted scraper could finish loading the site.",
                 suggestion="Try again later or verify that the target site is responsive.",
             )
@@ -360,27 +374,36 @@ class HostedJobService:
             )
         ):
             return self._failure_payload(
-                reason="connectivity_failure",
+                reason="connection_failed",
                 message="The hosted scraper could not connect to the target site.",
                 suggestion="Verify the URL and confirm the site is publicly reachable.",
             )
+        if diagnostics.get("non_fatal_issue_counts", {}).get("page_extraction_failed") or diagnostics.get(
+            "non_fatal_issue_counts", {}
+        ).get("detail_field_extraction_failed"):
+            return self._failure_payload(
+                reason="extraction_failed",
+                message="The scraper could not extract usable data from the target site.",
+                suggestion="The website structure may not match this preset.",
+                help_message=ADVANCED_HELP_MESSAGE,
+            )
         if diagnostics.get("non_fatal_issue_counts", {}).get("detail_page_fetch_failed") and listing_count > 0:
             return self._failure_payload(
-                reason="detail_page_fetch_failed",
+                reason="extraction_failed",
                 message="The scraper found listings but could not load any detail pages successfully.",
                 suggestion="The site may have blocked detail-page access or changed structure.",
                 help_message=ADVANCED_HELP_MESSAGE,
             )
         if listing_count == 0 and mode in {"directory_list", "directory_detail"}:
             return self._failure_payload(
-                reason="config_mismatch",
+                reason="no_results_found",
                 message="The website structure did not match the selected hosted preset.",
                 suggestion="Try a different preset or request a custom extraction setup.",
                 help_message=ADVANCED_HELP_MESSAGE,
             )
 
         return self._failure_payload(
-            reason="no_useful_results",
+            reason="no_results_found",
             message="The hosted scraper completed but did not produce useful results.",
             suggestion="Verify that the site content is public and that the selected preset matches the site.",
             help_message=ADVANCED_HELP_MESSAGE,
@@ -390,14 +413,14 @@ class HostedJobService:
         message = str(error).lower()
         if any(token in message for token in ("cloudflare", "captcha", "403", "429", "forbidden", "blocked")):
             return self._failure_payload(
-                reason="blocking_or_anti_bot",
+                reason="blocked_by_site",
                 message="The target site appears to be blocking automated requests.",
                 suggestion="Try a different site or contact CRK Dev for a custom scraping solution.",
                 help_message=ADVANCED_HELP_MESSAGE,
             )
         if any(token in message for token in ("timed out", "timeout")):
             return self._failure_payload(
-                reason="fetch_timeout",
+                reason="timeout",
                 message="The hosted scraper timed out while requesting the target site.",
                 suggestion="Try again later or verify that the target site is responsive.",
             )
@@ -412,12 +435,19 @@ class HostedJobService:
             )
         ):
             return self._failure_payload(
-                reason="connectivity_failure",
+                reason="connection_failed",
                 message="The hosted scraper could not connect to the target site.",
                 suggestion="Verify the URL and confirm the site is publicly reachable.",
             )
+        if "extract" in message:
+            return self._failure_payload(
+                reason="extraction_failed",
+                message="The hosted scraper could not extract usable data from the target site.",
+                suggestion="The website structure may not match this preset.",
+                help_message=ADVANCED_HELP_MESSAGE,
+            )
         return self._failure_payload(
-            reason="run_failed",
+            reason="extraction_failed",
             message="The hosted scraper could not complete this run.",
             suggestion="Review the run status and try again, or contact CRK Dev if the issue persists.",
         )
@@ -446,7 +476,7 @@ class HostedJobService:
             available = bool(output_dir and (output_dir / file_name).exists())
             files[file_name] = {
                 "available": available,
-                "download_path": None if not available else f"/api/jobs/__JOB_ID__/files/{file_name}",
+                "download_path": None if not available else f"/api/jobs/__JOB_ID__/download/{file_name}",
             }
         return files
 
@@ -477,8 +507,6 @@ class HostedJobService:
         if not path.exists():
             return None
         with self._metadata_lock:
-            import json
-
             return json.loads(path.read_text(encoding="utf-8"))
 
     def _default_pipeline_runner(self, options: RuntimeOptions) -> PipelineResult:
@@ -487,3 +515,85 @@ class HostedJobService:
 
     def _utc_now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def _build_job_response(self, job_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        files = self._materialize_download_paths(job_id, metadata.get("files", {}))
+        run_report = self._load_run_report(metadata.get("output_dir"))
+        response = dict(metadata)
+        response["files"] = files
+        response["files_available"] = {
+            file_name: file_info.get("available", False)
+            for file_name, file_info in files.items()
+        }
+        response["progress"] = self._build_progress(run_report, response["status"])
+        response["current_phase"] = self._determine_current_phase(response["status"])
+
+        if run_report:
+            response["pages_visited"] = run_report.get("pages_visited")
+            response["pagination_urls_followed"] = run_report.get("pagination_urls_followed")
+            response["records_extracted"] = run_report.get("row_count")
+            response["crawl_pages_scanned"] = run_report.get("pages_crawled")
+            response["run_duration"] = run_report.get("duration") or run_report.get("duration_seconds")
+            if response.get("status") == "failed" and not response.get("failure"):
+                response["failure"] = self._classify_report_failure(run_report)
+        else:
+            response["pages_visited"] = None
+            response["pagination_urls_followed"] = None
+            response["records_extracted"] = None
+            response["crawl_pages_scanned"] = None
+            response["run_duration"] = self._duration_from_metadata(
+                response.get("started_at"),
+                response.get("finished_at"),
+            )
+
+        return response
+
+    def _build_progress(
+        self,
+        run_report: dict[str, Any] | None,
+        status: str,
+    ) -> dict[str, Any] | None:
+        if run_report is None and status == "queued":
+            return None
+
+        report = run_report or {}
+        return {
+            "pages_scanned": report.get("pages_visited", report.get("pages_crawled", 0)),
+            "records_extracted": report.get("row_count", 0),
+            "pagination_pages": report.get("pagination_urls_followed", 0),
+        }
+
+    def _determine_current_phase(self, status: str) -> str:
+        if status == "queued":
+            return "queued"
+        if status == "running":
+            return "running"
+        if status == "completed":
+            return "completed"
+        return "failed"
+
+    def _load_run_report(self, output_dir_value: str | None) -> dict[str, Any] | None:
+        if not output_dir_value:
+            return None
+        report_path = Path(output_dir_value) / "run_report.json"
+        if not report_path.exists():
+            return None
+        try:
+            return json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def _duration_from_metadata(
+        self,
+        started_at: str | None,
+        finished_at: str | None,
+    ) -> str | None:
+        if not started_at or not finished_at:
+            return None
+        try:
+            started = datetime.fromisoformat(started_at)
+            finished = datetime.fromisoformat(finished_at)
+        except ValueError:
+            return None
+        duration_seconds = round((finished - started).total_seconds(), 3)
+        return f"{duration_seconds:.3f}s"

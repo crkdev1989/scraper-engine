@@ -40,7 +40,10 @@ def _successful_runner(options: RuntimeOptions) -> PipelineResult:
         "mode": "site_scan",
         "row_count": 1,
         "listing_count": 0,
+        "pages_crawled": 2,
         "pages_visited": 0,
+        "pagination_urls_followed": 0,
+        "duration": "0.100s",
         "pagination_stopped_reasons": [],
         "errors": [],
         "diagnostics": {},
@@ -74,7 +77,10 @@ def _pagination_failure_runner(options: RuntimeOptions) -> PipelineResult:
         "mode": "directory_list",
         "row_count": 0,
         "listing_count": 0,
+        "pages_crawled": 1,
         "pages_visited": 1,
+        "pagination_urls_followed": 0,
+        "duration": "0.200s",
         "pagination_stopped_reasons": ["no_next_page_found"],
         "errors": [],
         "diagnostics": {},
@@ -306,7 +312,7 @@ class HostedApiMilestoneTests(unittest.TestCase):
 
         self.assertEqual(202, submit_response.status_code)
         self.assertEqual("failed", submit_response.json()["status"])
-        self.assertEqual("blocking_or_anti_bot", submit_response.json()["failure"]["reason"])
+        self.assertEqual("blocked_by_site", submit_response.json()["failure"]["reason"])
         self.assertIn("custom scraping solutions", submit_response.json()["failure"]["help"])
 
 
