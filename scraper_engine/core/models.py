@@ -46,6 +46,7 @@ class ExtractorFieldConfig:
     attribute: str | None = None
     many: bool = False
     default: Any = None
+    transforms: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -78,6 +79,11 @@ class ExtractionConfig:
     fields: list[ExtractorFieldConfig] = field(default_factory=list)
     record_selector: RecordSelectorConfig | None = None
     detail_page: DetailPageConfig | None = None
+
+
+@dataclass
+class NormalizationConfig:
+    empty_like_strings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,6 +121,7 @@ class EngineConfig:
     requests: RequestConfig = field(default_factory=RequestConfig)
     crawl: CrawlConfig = field(default_factory=CrawlConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
+    normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     pagination: PaginationConfig = field(default_factory=PaginationConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -157,6 +164,7 @@ class EngineConfig:
                 if detail_page_payload
                 else None,
             ),
+            normalization=NormalizationConfig(**payload.get("normalization", {})),
             pagination=PaginationConfig(
                 enabled=pagination_payload.get("enabled", False),
                 max_pages=pagination_payload.get("max_pages", 1),

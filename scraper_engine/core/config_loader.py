@@ -43,6 +43,7 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("requests", {})
     normalized.setdefault("crawl", {})
     normalized.setdefault("extraction", {})
+    normalized.setdefault("normalization", {})
     normalized.setdefault("pagination", {})
     normalized.setdefault("output", {})
     normalized.setdefault("logging", {})
@@ -105,6 +106,9 @@ def _normalize_field_payload(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["selector"] = normalized.pop("css")
     if "attr" in normalized and "attribute" not in normalized:
         normalized["attribute"] = normalized.pop("attr")
+    normalized["transforms"] = _normalize_transforms_collection(
+        normalized.get("transforms", [])
+    )
     return normalized
 
 
@@ -125,3 +129,25 @@ def _normalize_fields_collection(fields_payload: Any) -> list[dict[str, Any]]:
             for field_name, field_payload in fields_payload.items()
         ]
     return [_normalize_field_payload(field_payload) for field_payload in fields_payload]
+
+
+def _normalize_transforms_collection(transforms_payload: Any) -> list[dict[str, Any]]:
+    if transforms_payload is None:
+        return []
+    normalized_transforms: list[dict[str, Any]] = []
+    for transform in transforms_payload:
+        if isinstance(transform, str):
+            normalized_transforms.append({"name": transform})
+            continue
+        if not isinstance(transform, dict):
+            raise ValueError("Transforms must be strings or objects.")
+        normalized = dict(transform)
+        if "name" not in normalized:
+            if "type" in normalized:
+                normalized["name"] = normalized.pop("type")
+            elif "transform" in normalized:
+                normalized["name"] = normalized.pop("transform")
+            else:
+                raise ValueError("Transform objects must include a name.")
+        normalized_transforms.append(normalized)
+    return normalized_transforms

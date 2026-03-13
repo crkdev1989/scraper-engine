@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from scraper_engine.core.models import CrawlPage, DetailPageConfig, EngineConfig, PaginationConfig, RunContext
+from scraper_engine.core.record_post_processor import RecordPostProcessor
 from scraper_engine.crawl.crawler import Crawler
 from scraper_engine.crawl.fetcher import Fetcher
 from scraper_engine.crawl.url_utils import normalize_url
@@ -30,6 +31,7 @@ class JobRunner:
         self.directory_extractor = DirectoryListExtractor()
         self.directory_detail_extractor = DirectoryDetailExtractor(extractor_registry)
         self.mapper = mapper
+        self.post_processor = RecordPostProcessor(logger=logger)
         self.logger = logger
 
     def run(
@@ -77,6 +79,11 @@ class JobRunner:
                         html=page.html or "",
                         url=page.url,
                         fields=config.extraction.fields,
+                    )
+                    extracted = self.post_processor.process_record(
+                        extracted,
+                        config.extraction.fields,
+                        config.normalization,
                     )
                     page_payloads.append(
                         {
@@ -201,6 +208,11 @@ class JobRunner:
                     extraction_config=config.extraction,
                 )
                 for record in extracted_rows:
+                    record = self.post_processor.process_record(
+                        record,
+                        config.extraction.fields,
+                        config.normalization,
+                    )
                     rows.append(
                         {
                             "input_url": target,
@@ -322,6 +334,11 @@ class JobRunner:
                 listing_count += len(base_rows)
 
                 for base_record in base_rows:
+                    base_record = self.post_processor.process_record(
+                        base_record,
+                        config.extraction.fields,
+                        config.normalization,
+                    )
                     enriched_row = {
                         "input_url": target,
                         "source_url": directory_page.url,
@@ -363,6 +380,11 @@ class JobRunner:
                                     html=detail_page.html or "",
                                     page_url=detail_page.url,
                                     detail_page_config=detail_page_config,
+                                )
+                                detail_fields = self.post_processor.process_record(
+                                    detail_fields,
+                                    detail_page_config.fields,
+                                    config.normalization,
                                 )
                                 enriched_row = self.directory_detail_extractor.merge_detail_fields(
                                     enriched_row,
