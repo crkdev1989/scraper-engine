@@ -1,0 +1,71 @@
+name: contractors
+mode: site_scan
+description: Private preset scaffold for contractor site scanning and business detail capture.
+
+requests:
+  timeout_seconds: 25
+  retries: 3
+  backoff_seconds: 2.0
+
+crawl:
+  mode: site_scan
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 6
+  priority_keywords:
+    - contact
+    - about
+    - services
+    - office
+    - location
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: company_name
+      selector: "h1"
+    - name: service_areas
+      selector: ".service-area, .locations li"
+      many: true
+      default: []
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phone_numbers
+      type: phone_numbers
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: true
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: contractors
+  columns:
+    - source_url
+    - company_name
+    - page_title
+    - service_areas
+    - emails
+    - phone_numbers
+
+metadata:
+  audience: private
+  engine_mode: site_scan

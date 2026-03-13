@@ -1,0 +1,79 @@
+name: business_info
+preset: business_info
+mode: site_scan
+description: Public preset for collecting basic business information from a website.
+
+requests:
+  timeout_seconds: 20
+  retries: 3
+  backoff_seconds: 1.5
+  verify_ssl: true
+  allow_insecure_fallback: true
+
+crawl:
+  mode: site_scan
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 4
+  priority_keywords:
+    - contact
+    - about
+    - team
+    - staff
+    - office
+    - location
+    - get-in-touch
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: business_name
+      type: business_name
+    - name: page_title
+      type: page_title
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phones
+      type: phones
+      many: true
+      default: []
+    - name: address
+      type: address
+    - name: social_links
+      type: social_links
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: true
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: business_info
+  columns:
+    - input_url
+    - business_name
+    - page_title
+    - phones
+    - emails
+    - address
+    - social_links
+    - source_urls
+
+metadata:
+  audience: public

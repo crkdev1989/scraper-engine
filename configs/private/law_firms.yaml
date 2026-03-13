@@ -1,0 +1,71 @@
+name: law_firms
+mode: directory_detail
+description: Private preset scaffold for law firm directory detail extraction.
+
+requests:
+  timeout_seconds: 25
+  retries: 3
+  backoff_seconds: 2.0
+
+crawl:
+  mode: directory_detail
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 5
+  priority_keywords:
+    - attorneys
+    - lawyers
+    - team
+    - staff
+    - contact
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: attorney_name
+      selector: "h1"
+    - name: practice_areas
+      selector: ".practice-areas li, .services li"
+      many: true
+      default: []
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phone_numbers
+      type: phone_numbers
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: false
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: law_firms
+  columns:
+    - source_url
+    - page_url
+    - attorney_name
+    - practice_areas
+    - emails
+    - phone_numbers
+
+metadata:
+  audience: private
+  engine_mode: directory_detail

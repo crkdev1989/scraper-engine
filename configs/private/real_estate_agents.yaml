@@ -1,0 +1,69 @@
+name: real_estate_agents
+mode: directory_list
+description: Private preset scaffold for listing real estate agents from directory pages.
+
+requests:
+  timeout_seconds: 25
+  retries: 3
+  backoff_seconds: 2.0
+
+crawl:
+  mode: directory_list
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 6
+  priority_keywords:
+    - agents
+    - team
+    - staff
+    - office
+    - contact
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: listing_cards
+      selector: ".agent-card, .team-member, .staff-card"
+      many: true
+      default: []
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phone_numbers
+      type: phone_numbers
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: false
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: real_estate_agents
+  columns:
+    - source_url
+    - page_url
+    - page_title
+    - listing_cards
+    - emails
+    - phone_numbers
+
+metadata:
+  audience: private
+  engine_mode: directory_list

@@ -1,0 +1,71 @@
+name: page_data
+preset: page_data
+mode: site_scan
+description: Public preset for capturing simple page-level metadata from a website.
+
+requests:
+  timeout_seconds: 20
+  retries: 3
+  backoff_seconds: 1.5
+  verify_ssl: true
+  allow_insecure_fallback: true
+
+crawl:
+  mode: site_scan
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 4
+  priority_keywords:
+    - contact
+    - about
+    - team
+    - staff
+    - office
+    - location
+    - get-in-touch
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: meta_description
+      type: meta_description
+    - name: headings
+      type: headings
+      many: true
+      default: []
+    - name: internal_links
+      type: internal_links
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: true
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: page_data
+  columns:
+    - input_url
+    - page_title
+    - meta_description
+    - headings
+    - internal_links
+    - source_urls
+
+metadata:
+  audience: public

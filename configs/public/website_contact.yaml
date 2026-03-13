@@ -1,0 +1,78 @@
+name: website_contact
+preset: website_contact
+mode: site_scan
+description: Public preset for capturing contact details from a single site crawl.
+
+requests:
+  timeout_seconds: 20
+  retries: 3
+  backoff_seconds: 1.5
+  verify_ssl: true
+  allow_insecure_fallback: true
+
+crawl:
+  mode: site_scan
+  same_domain_only: true
+  max_pages: 10
+  concurrency: 4
+  priority_keywords:
+    - contact
+    - about
+    - team
+    - staff
+    - office
+    - location
+    - get-in-touch
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: contact_pages
+      type: contact_links
+      many: true
+      default: []
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phones
+      type: phones
+      many: true
+      default: []
+    - name: social_links
+      type: social_links
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: true
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: website_contact
+  columns:
+    - input_url
+    - page_title
+    - contact_pages
+    - emails
+    - phones
+    - social_links
+    - source_urls
+
+metadata:
+  audience: public
