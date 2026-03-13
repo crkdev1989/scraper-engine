@@ -54,9 +54,17 @@ class RecordSelectorConfig:
 
 
 @dataclass
+class DetailPageConfig:
+    enabled: bool = False
+    url_field: str | None = None
+    fields: list[ExtractorFieldConfig] = field(default_factory=list)
+
+
+@dataclass
 class ExtractionConfig:
     fields: list[ExtractorFieldConfig] = field(default_factory=list)
     record_selector: RecordSelectorConfig | None = None
+    detail_page: DetailPageConfig | None = None
 
 
 @dataclass
@@ -109,6 +117,11 @@ class EngineConfig:
             for field_payload in extraction.get("fields", [])
         ]
         record_selector_payload = extraction.get("record_selector")
+        detail_page_payload = extraction.get("detail_page")
+        detail_page_fields = [
+            ExtractorFieldConfig(**field_payload)
+            for field_payload in (detail_page_payload or {}).get("fields", [])
+        ]
         return cls(
             name=payload["name"],
             mode=payload.get("mode", "site_scan"),
@@ -120,6 +133,13 @@ class EngineConfig:
                 fields=fields,
                 record_selector=RecordSelectorConfig(**record_selector_payload)
                 if record_selector_payload
+                else None,
+                detail_page=DetailPageConfig(
+                    enabled=detail_page_payload.get("enabled", False),
+                    url_field=detail_page_payload.get("url_field"),
+                    fields=detail_page_fields,
+                )
+                if detail_page_payload
                 else None,
             ),
             output=OutputConfig(**payload.get("output", {})),

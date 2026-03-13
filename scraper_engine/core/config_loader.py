@@ -58,23 +58,23 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
         normalized["extraction"]["record_selector"] = normalized.pop("record_selector")
     if "fields" in normalized and "fields" not in normalized["extraction"]:
         normalized["extraction"]["fields"] = normalized.pop("fields")
+    if "detail_page" in normalized and "detail_page" not in normalized["extraction"]:
+        normalized["extraction"]["detail_page"] = normalized.pop("detail_page")
 
     record_selector = normalized["extraction"].get("record_selector")
     if isinstance(record_selector, str):
         normalized["extraction"]["record_selector"] = {"css": record_selector}
 
-    fields_payload = normalized["extraction"].get("fields", [])
-    if isinstance(fields_payload, dict):
-        normalized["extraction"]["fields"] = [
-            _normalize_dict_field_payload(field_name, field_payload)
-            for field_name, field_payload in fields_payload.items()
-        ]
+    detail_page = normalized["extraction"].get("detail_page")
+    if detail_page is not None:
+        detail_page.setdefault("enabled", True)
+        detail_page.setdefault("fields", [])
 
-    fields = normalized["extraction"].get("fields", [])
-    normalized["extraction"]["fields"] = [
-        _normalize_field_payload(field_payload)
-        for field_payload in fields
-    ]
+    normalized["extraction"]["fields"] = _normalize_fields_collection(
+        normalized["extraction"].get("fields", [])
+    )
+    if detail_page is not None:
+        detail_page["fields"] = _normalize_fields_collection(detail_page.get("fields", []))
     return normalized
 
 
@@ -100,3 +100,12 @@ def _normalize_dict_field_payload(field_name: str, payload: Any) -> dict[str, An
     normalized = dict(payload)
     normalized["name"] = field_name
     return normalized
+
+
+def _normalize_fields_collection(fields_payload: Any) -> list[dict[str, Any]]:
+    if isinstance(fields_payload, dict):
+        fields_payload = [
+            _normalize_dict_field_payload(field_name, field_payload)
+            for field_name, field_payload in fields_payload.items()
+        ]
+    return [_normalize_field_payload(field_payload) for field_payload in fields_payload]

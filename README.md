@@ -17,7 +17,7 @@ This stage includes:
 - per-run output folders with logs and reports
 - starter public and private configs
 
-This stage does **not** yet include browser automation, a frontend, FastAPI, or a finished `directory_detail` engine.
+This stage does **not** yet include browser automation, a frontend, FastAPI, or advanced `directory_detail` features like pagination or JS rendering.
 
 ## Project Layout
 
@@ -126,6 +126,7 @@ The engine currently supports:
 - reusable extractor types such as `page_title`, `business_name`, `emails`, `phones`, `contact_links`, `social_links`, `internal_links`, `address`, and `headings`
 - selector-based extraction with CSS or XPath
 - selector-based `directory_list` extraction with per-listing CSS field extraction
+- sequential `directory_detail` enrichment using config-defined detail URLs and full-document field extraction
 - `--url` input
 - `--input` file input from `.txt`, `.csv`, `.json`, `.yaml`, `.yml`
 - same-domain prioritized site crawling with retries, timeout handling, duplicate URL prevention, relative URL resolution, and merged public outputs
@@ -138,6 +139,7 @@ Implemented now:
 - real v1 `site_scan` execution from the CLI
 - public presets for `website_contact`, `business_info`, and `page_data`
 - minimum viable `directory_list` mode for extracting multiple records from a single directory page
+- minimum viable `directory_detail` mode for enriching listings from fetched detail pages
 - merged single-row public outputs with CSV/JSON/report artifacts
 - optional `raw_pages/` storage
 - per-run console and file logging
@@ -146,7 +148,7 @@ Implemented now:
 Not implemented yet:
 
 - browser-rendered scraping
-- detail-page following for `directory_detail`
+- pagination and broader detail-page crawling strategies
 - API or web wrapper
 - advanced anti-bot handling
 - polished sync deployment automation
@@ -154,5 +156,9 @@ Not implemented yet:
 ## Sample Directory List Config
 
 See `configs/private/real_estate_agents.yaml` for a Milestone 1 `directory_list` example that extracts one row per listing container using CSS selectors.
+
+## Sample Directory Detail Config
+
+See `configs/private/law_firms.yaml` for a Milestone 2 `directory_detail` example that extracts listing rows first and then enriches them from fetched detail pages.
 
 Public presets are separated from private presets from day one to keep the shared engine clean while supporting different product surfaces later.

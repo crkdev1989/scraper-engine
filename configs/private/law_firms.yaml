@@ -1,6 +1,6 @@
 name: law_firms
 mode: directory_detail
-description: Private preset scaffold for law firm directory detail extraction.
+description: Sample directory_detail preset for enriching law firm listings from profile pages.
 
 requests:
   timeout_seconds: 25
@@ -21,23 +21,34 @@ crawl:
   store_debug_html: false
 
 extraction:
+  record_selector:
+    css: ".listing-card, .attorney-card, .profile-card"
   fields:
-    - name: page_title
-      type: page_title
     - name: attorney_name
-      selector: "h1"
-    - name: practice_areas
-      selector: ".practice-areas li, .services li"
-      many: true
-      default: []
-    - name: emails
-      type: emails
-      many: true
-      default: []
-    - name: phone_numbers
-      type: phone_numbers
-      many: true
-      default: []
+      selector: ".attorney-name, .profile-name, h2, h3"
+    - name: firm_name
+      selector: ".firm-name"
+    - name: detail_url
+      selector: "a.profile, a.attorney-link, a[href]"
+      attribute: "href"
+  detail_page:
+    enabled: true
+    url_field: detail_url
+    fields:
+      - name: email
+        selector: "a[href^='mailto:']"
+        attribute: "href"
+      - name: website
+        selector: "a.website, a[href*='http']"
+        attribute: "href"
+      - name: address
+        selector: ".address, address"
+      - name: bio
+        selector: ".bio, .profile-bio, .attorney-bio"
+      - name: practice_areas
+        selector: ".practice-areas li, .services li"
+        many: true
+        default: []
 
 output:
   root_dir: outputs
@@ -59,12 +70,16 @@ sync:
 schema:
   name: law_firms
   columns:
+    - input_url
     - source_url
-    - page_url
     - attorney_name
+    - firm_name
+    - detail_url
+    - email
+    - website
+    - address
+    - bio
     - practice_areas
-    - emails
-    - phone_numbers
 
 metadata:
   audience: private
