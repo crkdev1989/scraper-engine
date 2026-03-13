@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
+from urllib.parse import urlparse
 
-from scraper_engine.core.config_loader import load_config
+from scraper_engine.core.config_loader import load_config, load_raw_config
 from scraper_engine.core.models import PipelineResult, RuntimeOptions
 from scraper_engine.core.pipeline import Pipeline
 from scraper_engine.crawl.url_utils import normalize_url
@@ -26,6 +29,12 @@ ADVANCED_HELP_MESSAGE = (
     "This site may require advanced scraping or custom extraction. "
     "If you need help scraping this data, CRK Dev offers custom scraping solutions."
 )
+DEFAULT_MAX_PAGES = 10
+DEFAULT_MAX_RECORDS = 500
+DEFAULT_MAX_RUNTIME_SECONDS = 120
+DEFAULT_MAX_DOWNLOAD_BYTES = 15 * 1024 * 1024
+DEFAULT_MAX_JOBS_PER_HOUR_PER_IP = 5
+RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
 class HostedServiceError(Exception):
@@ -65,6 +74,11 @@ class HostedJobService:
         output_root: Path,
         pipeline_runner: Callable[[RuntimeOptions], PipelineResult] | None = None,
         run_jobs_inline: bool = False,
+        max_pages: int | None = None,
+        max_records: int | None = None,
+        max_runtime_seconds: int | None = None,
+        max_download_bytes: int | None = None,
+        max_jobs_per_hour_per_ip: int | None = None,
     ) -> None:
         self.public_config_root = public_config_root
         self.output_root = output_root
@@ -74,6 +88,36 @@ class HostedJobService:
         self._pipeline_runner = pipeline_runner or self._default_pipeline_runner
         self._metadata_lock = Lock()
         self._executor = None if run_jobs_inline else ThreadPoolExecutor(max_workers=2)
+        self._rate_limit_lock = Lock()
+        self._submission_history: dict[str, list[float]] = {}
+        self.max_pages = (
+            max_pages
+            if max_pages is not None
+            else _env_int("SCRAPER_ENGINE_HOSTED_MAX_PAGES", DEFAULT_MAX_PAGES)
+        )
+        self.max_records = (
+            max_records
+            if max_records is not None
+            else _env_int("SCRAPER_ENGINE_HOSTED_MAX_RECORDS", DEFAULT_MAX_RECORDS)
+        )
+        self.max_runtime_seconds = (
+            max_runtime_seconds
+            if max_runtime_seconds is not None
+            else _env_int("SCRAPER_ENGINE_HOSTED_MAX_RUNTIME_SECONDS", DEFAULT_MAX_RUNTIME_SECONDS)
+        )
+        self.max_download_bytes = (
+            max_download_bytes
+            if max_download_bytes is not None
+            else _env_int("SCRAPER_ENGINE_HOSTED_MAX_DOWNLOAD_BYTES", DEFAULT_MAX_DOWNLOAD_BYTES)
+        )
+        self.max_jobs_per_hour_per_ip = (
+            max_jobs_per_hour_per_ip
+            if max_jobs_per_hour_per_ip is not None
+            else _env_int(
+                "SCRAPER_ENGINE_HOSTED_MAX_JOBS_PER_HOUR_PER_IP",
+                DEFAULT_MAX_JOBS_PER_HOUR_PER_IP,
+            )
+        )
 
     def capabilities(self) -> dict[str, Any]:
         presets = self.list_presets()
@@ -87,6 +131,9 @@ class HostedJobService:
         presets = self.list_presets()
         return {
             "allowed_presets": [preset["preset"] for preset in presets],
+            "max_pages": self.max_pages,
+            "max_records": self.max_records,
+            "max_runtime_seconds": self.max_runtime_seconds,
             "presets": [
                 {
                     "preset": preset["preset"],
@@ -136,14 +183,17 @@ class HostedJobService:
         preset: str,
         target_url: str,
         run_name: str | None = None,
+        client_ip: str | None = None,
     ) -> dict[str, Any]:
         config_path = self._resolve_public_config_path(preset)
         normalized_target = self._validate_target_url(target_url)
+        self._enforce_rate_limit(client_ip)
 
         job_id = uuid.uuid4().hex[:12]
         job_dir = self.jobs_root / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         config = load_config(config_path)
+        runtime_config_path = self._build_runtime_config(config_path, job_dir)
 
         metadata = {
             "job_id": job_id,
@@ -152,8 +202,10 @@ class HostedJobService:
             "config_name": config.name,
             "mode": config.mode,
             "target_url": normalized_target,
+            "client_ip": client_ip,
             "requested_run_name": (run_name or "").strip() or None,
-            "config_path": str(config_path.resolve()),
+            "config_path": str(runtime_config_path.resolve()),
+            "source_config_path": str(config_path.resolve()),
             "created_at": self._utc_now(),
             "started_at": None,
             "finished_at": None,
@@ -228,6 +280,13 @@ class HostedJobService:
                 message="The requested output file is missing.",
                 suggestion="Check the job status or run report for file availability.",
             )
+        if file_path.stat().st_size > self.max_download_bytes:
+            raise HostedServiceError(
+                status_code=413,
+                reason="limit_exceeded",
+                message="This output file exceeds the hosted download size limit.",
+                suggestion="Reduce the scope of the scrape or contact CRK Dev for custom scraping.",
+            )
         return file_path
 
     def _run_job(self, job_id: str) -> None:
@@ -237,14 +296,17 @@ class HostedJobService:
         self._write_job_metadata(job_id, metadata)
 
         try:
-            result = self._pipeline_runner(
-                RuntimeOptions(
-                    config_path=Path(metadata["config_path"]),
-                    single_url=metadata["target_url"],
-                    run_name=metadata["requested_run_name"] or metadata["job_id"],
-                    output_root=self.output_root,
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self._pipeline_runner,
+                    RuntimeOptions(
+                        config_path=Path(metadata["config_path"]),
+                        single_url=metadata["target_url"],
+                        run_name=metadata["requested_run_name"] or metadata["job_id"],
+                        output_root=self.output_root,
+                    ),
                 )
-            )
+                result = future.result(timeout=self.max_runtime_seconds)
             failure = self._classify_report_failure(result.report)
             metadata.update(
                 {
@@ -254,6 +316,18 @@ class HostedJobService:
                     "output_dir": str(result.run_context.output_dir.resolve()),
                     "files": self._build_file_availability(result.run_context.output_dir),
                     "failure": failure,
+                }
+            )
+        except FutureTimeoutError:
+            metadata.update(
+                {
+                    "status": "failed",
+                    "finished_at": self._utc_now(),
+                    "failure": self._failure_payload(
+                        reason="limit_exceeded",
+                        message="This run exceeded the limits of the hosted tool.",
+                        suggestion="Reduce the scope of the scrape or contact CRK Dev for custom scraping.",
+                    ),
                 }
             )
         except HostedServiceError as error:
@@ -302,15 +376,52 @@ class HostedJobService:
         )
 
     def _validate_target_url(self, target_url: str) -> str:
+        raw_target = (target_url or "").strip()
+        parsed_input = urlparse(raw_target)
+        if parsed_input.scheme and parsed_input.scheme.lower() not in {"http", "https"}:
+            raise HostedServiceError(
+                status_code=400,
+                reason="invalid_target",
+                message="The submitted URL is not allowed.",
+                suggestion="Please submit a valid public website URL.",
+            )
         try:
-            return normalize_url(target_url)
+            normalized = normalize_url(target_url)
         except Exception:
             raise HostedServiceError(
                 status_code=400,
-                reason="invalid_url",
-                message="The submitted target URL is not valid.",
-                suggestion="Enter a full public website URL such as https://example.com.",
+                reason="invalid_target",
+                message="The submitted URL is not allowed.",
+                suggestion="Please submit a valid public website URL.",
             ) from None
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"}:
+            raise HostedServiceError(
+                status_code=400,
+                reason="invalid_target",
+                message="The submitted URL is not allowed.",
+                suggestion="Please submit a valid public website URL.",
+            )
+        hostname = (parsed.hostname or "").lower()
+        if hostname in {"localhost", "127.0.0.1", "0.0.0.0"}:
+            raise HostedServiceError(
+                status_code=400,
+                reason="invalid_target",
+                message="The submitted URL is not allowed.",
+                suggestion="Please submit a valid public website URL.",
+            )
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            return normalized
+        if not ip.is_global:
+            raise HostedServiceError(
+                status_code=400,
+                reason="invalid_target",
+                message="The submitted URL is not allowed.",
+                suggestion="Please submit a valid public website URL.",
+            )
+        return normalized
 
     def _classify_report_failure(self, report: dict[str, Any]) -> dict[str, Any] | None:
         row_count = int(report.get("row_count", 0) or 0)
@@ -597,3 +708,60 @@ class HostedJobService:
             return None
         duration_seconds = round((finished - started).total_seconds(), 3)
         return f"{duration_seconds:.3f}s"
+
+    def _build_runtime_config(self, config_path: Path, job_dir: Path) -> Path:
+        payload = load_raw_config(config_path)
+        payload.setdefault("crawl", {})
+        payload.setdefault("pagination", {})
+        payload.setdefault("limits", {})
+
+        payload["crawl"]["max_pages"] = min(
+            int(payload["crawl"].get("max_pages", self.max_pages) or self.max_pages),
+            self.max_pages,
+        )
+        payload["pagination"]["max_pages"] = min(
+            int(payload["pagination"].get("max_pages", self.max_pages) or self.max_pages),
+            self.max_pages,
+        )
+
+        existing_max_records = payload["limits"].get("max_records")
+        if existing_max_records is None:
+            payload["limits"]["max_records"] = self.max_records
+        else:
+            payload["limits"]["max_records"] = min(int(existing_max_records), self.max_records)
+
+        runtime_config_path = job_dir / "runtime_config.json"
+        write_json(runtime_config_path, payload)
+        return runtime_config_path
+
+    def _enforce_rate_limit(self, client_ip: str | None) -> None:
+        key = client_ip or "unknown"
+        now = datetime.now(timezone.utc).timestamp()
+        window_start = now - RATE_LIMIT_WINDOW_SECONDS
+        with self._rate_limit_lock:
+            history = [
+                timestamp
+                for timestamp in self._submission_history.get(key, [])
+                if timestamp >= window_start
+            ]
+            if len(history) >= self.max_jobs_per_hour_per_ip:
+                self._submission_history[key] = history
+                raise HostedServiceError(
+                    status_code=429,
+                    reason="rate_limited",
+                    message="Too many jobs have been submitted from this client.",
+                    suggestion="Wait before submitting another hosted scrape.",
+                )
+            history.append(now)
+            self._submission_history[key] = history
+
+
+def _env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    return value if value > 0 else default

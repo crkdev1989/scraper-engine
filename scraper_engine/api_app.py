@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -36,6 +36,11 @@ def create_app(
     pipeline_runner=None,
     run_jobs_inline: bool = False,
     cors_origins: list[str] | None = None,
+    max_pages: int | None = None,
+    max_records: int | None = None,
+    max_runtime_seconds: int | None = None,
+    max_download_bytes: int | None = None,
+    max_jobs_per_hour_per_ip: int | None = None,
 ) -> FastAPI:
     repo_root = Path(__file__).resolve().parent.parent
     service = HostedJobService(
@@ -43,6 +48,11 @@ def create_app(
         output_root=output_root or (repo_root / "outputs"),
         pipeline_runner=pipeline_runner,
         run_jobs_inline=run_jobs_inline,
+        max_pages=max_pages,
+        max_records=max_records,
+        max_runtime_seconds=max_runtime_seconds,
+        max_download_bytes=max_download_bytes,
+        max_jobs_per_hour_per_ip=max_jobs_per_hour_per_ip,
     )
 
     app = FastAPI(title="scraper-engine hosted backend", version="0.1.0")
@@ -74,12 +84,13 @@ def create_app(
         return {"status": "ok"}
 
     @app.post("/api/jobs", status_code=202)
-    def submit_job(payload: JobSubmissionRequest) -> dict[str, Any]:
+    def submit_job(payload: JobSubmissionRequest, request: Request) -> dict[str, Any]:
         try:
             return service.submit_job(
                 preset=payload.preset,
                 target_url=payload.target_url,
                 run_name=payload.run_name,
+                client_ip=request.client.host if request.client else None,
             )
         except HostedServiceError as error:
             raise HTTPException(status_code=error.status_code, detail=error.to_failure()) from error

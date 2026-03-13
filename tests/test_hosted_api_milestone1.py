@@ -229,7 +229,7 @@ class HostedApiMilestoneTests(unittest.TestCase):
         self.assertEqual(400, bad_preset.status_code)
         self.assertEqual("unsupported_config", bad_preset.json()["detail"]["reason"])
         self.assertEqual(400, bad_url.status_code)
-        self.assertEqual("invalid_url", bad_url.json()["detail"]["reason"])
+        self.assertEqual("invalid_target", bad_url.json()["detail"]["reason"])
 
     def test_failed_job_maps_user_readable_reason_and_blocks_download(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
