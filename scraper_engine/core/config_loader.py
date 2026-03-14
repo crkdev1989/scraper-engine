@@ -54,6 +54,8 @@ def normalize_config_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("static_targets", [])
 
     normalized["crawl"].setdefault("mode", normalized["mode"])
+    normalized["crawl"].setdefault("include_url_keywords", [])
+    normalized["crawl"].setdefault("exclude_url_keywords", [])
     normalized["output"].setdefault("root_dir", "outputs")
     normalized["output"].setdefault("merge_rows", normalized["mode"] == "site_scan")
     normalized["logging"].setdefault("file_name", "run.log")

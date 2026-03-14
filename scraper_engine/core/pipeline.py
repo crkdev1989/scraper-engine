@@ -5,13 +5,15 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from scraper_engine.core.clean_csv_runner import run_clean_csv_job
 from scraper_engine.core.config_loader import load_config
 from scraper_engine.core.job_runner import JobRunner
 from scraper_engine.core.models import PipelineResult, RuntimeOptions
 from scraper_engine.crawl.crawler import Crawler
 from scraper_engine.crawl.fetcher import Fetcher
 from scraper_engine.extractors.registry import ExtractorRegistry
-from scraper_engine.inputs.loaders import load_targets
+from scraper_engine.inputs.loaders import load_target_contexts, load_targets
+from scraper_engine.outputs.lead_cleaner import cleaned_output_file_name, write_cleaned_lead_csv
 from scraper_engine.outputs.paths import build_run_context
 from scraper_engine.outputs.reporters import write_run_report, write_summary
 from scraper_engine.outputs.writers import write_csv, write_json
@@ -59,7 +61,16 @@ class Pipeline:
                 allow_insecure_fallback=config.requests.allow_insecure_fallback,
             )
 
+        if config.mode == "clean_csv":
+            return self._run_clean_csv_mode(
+                options=options,
+                config=config,
+                run_context=run_context,
+                logger=logger,
+            )
+
         targets = load_targets(options, config)
+        target_contexts = load_target_contexts(options, config)
         log_event(
             logger,
             logging.INFO,
@@ -79,6 +90,7 @@ class Pipeline:
 
         started_at = datetime.now(timezone.utc)
         rows, runner_report = runner.run(targets=targets, config=config, run_context=run_context)
+        rows = self._expand_rows_with_input_context(rows, target_contexts)
         ended_at = datetime.now(timezone.utc)
         sync_result = run_sync_hook(config.sync, run_context, logger=logger)
         duration_seconds = round((ended_at - started_at).total_seconds(), 3)
@@ -94,7 +106,7 @@ class Pipeline:
             "duration_seconds": duration_seconds,
             "duration": f"{duration_seconds:.3f}s",
             "target_count": runner_report["target_count"],
-            "row_count": runner_report["row_count"],
+            "row_count": len(rows),
             "error_count": runner_report["error_count"],
             "pages_crawled": runner_report["pages_crawled"],
             "pages_succeeded": runner_report["pages_succeeded"],
@@ -117,6 +129,8 @@ class Pipeline:
             "sync_result": sync_result,
             "config_snapshot": config.to_dict(),
         }
+        if target_contexts:
+            report["notes"].append("Preserved input CSV row context on enriched output rows.")
         report["diagnostics"]["pagination_stop_reason_counts"] = dict(
             sorted(Counter(report.get("pagination_stopped_reasons", [])).items())
         )
@@ -127,13 +141,34 @@ class Pipeline:
 
         preferred_columns = self._resolve_preferred_columns(config, rows)
         if config.output.write_csv:
-            write_csv(run_context.output_dir / "results.csv", rows, preferred_columns)
+            write_csv(
+                run_context.output_dir / self._get_output_file_name(config, "csv", "results.csv"),
+                rows,
+                preferred_columns,
+            )
+        cleaned_output = self._write_configured_cleaned_output(
+            rows=rows,
+            config=config,
+            run_context=run_context,
+            logger=logger,
+        )
+        if cleaned_output is not None:
+            report["cleaned_output"] = cleaned_output
         if config.output.write_json:
-            write_json(run_context.output_dir / "results.json", rows)
+            write_json(
+                run_context.output_dir / self._get_output_file_name(config, "json", "results.json"),
+                rows,
+            )
         if config.output.write_summary:
-            write_summary(run_context.output_dir / "summary.txt", report)
+            write_summary(
+                run_context.output_dir / self._get_output_file_name(config, "summary", "summary.txt"),
+                report,
+            )
         if config.output.write_report:
-            write_run_report(run_context.output_dir / "run_report.json", report)
+            write_run_report(
+                run_context.output_dir / self._get_output_file_name(config, "report", "run_report.json"),
+                report,
+            )
         log_event(
             logger,
             logging.INFO,
@@ -143,6 +178,7 @@ class Pipeline:
             results_json=config.output.write_json,
             summary=config.output.write_summary,
             run_report=config.output.write_report,
+            cleaned_csv=bool(cleaned_output),
             row_count=report["row_count"],
         )
         log_event(
@@ -165,10 +201,7 @@ class Pipeline:
 
     def _default_output_root(self, options: RuntimeOptions):
         config_path = options.config_path.resolve()
-        if (
-            config_path.parent.name in {"public", "private"}
-            and config_path.parent.parent.name == "configs"
-        ):
+        if config_path.parent.parent.name == "configs":
             return config_path.parent.parent.parent / "outputs"
         return config_path.parent / "outputs"
 
@@ -207,6 +240,174 @@ class Pipeline:
             columns = ordered
 
         return columns
+
+    def _get_output_file_name(
+        self,
+        config,
+        output_key: str,
+        default_name: str,
+    ) -> str:
+        output_files = config.metadata.get("output_files", {})
+        if not isinstance(output_files, dict):
+            return default_name
+        file_name = str(output_files.get(output_key) or "").strip()
+        return file_name or default_name
+
+    def _run_clean_csv_mode(
+        self,
+        *,
+        options: RuntimeOptions,
+        config,
+        run_context,
+        logger,
+    ) -> PipelineResult:
+        started_at = datetime.now(timezone.utc)
+        cleaned_rows, clean_csv = run_clean_csv_job(
+            config=config,
+            config_path=options.config_path,
+            input_path=options.input_path,
+            run_context=run_context,
+        )
+        ended_at = datetime.now(timezone.utc)
+        sync_result = run_sync_hook(config.sync, run_context, logger=logger)
+        duration_seconds = round((ended_at - started_at).total_seconds(), 3)
+
+        report = {
+            "run_name": run_context.run_name,
+            "config_name": config.name,
+            "mode": config.mode,
+            "config_path": str(options.config_path.resolve()),
+            "input_targets": [str(options.input_path.resolve())] if options.input_path else [],
+            "started_at": started_at.isoformat(),
+            "ended_at": ended_at.isoformat(),
+            "duration_seconds": duration_seconds,
+            "duration": f"{duration_seconds:.3f}s",
+            "target_count": 1 if options.input_path else 0,
+            "row_count": len(cleaned_rows),
+            "error_count": 0,
+            "pages_crawled": 0,
+            "pages_succeeded": 0,
+            "pages_failed": 0,
+            "pages_visited": 0,
+            "listing_count": 0,
+            "detail_pages_attempted": 0,
+            "detail_pages_successful": 0,
+            "detail_pages_failed": 0,
+            "pagination_urls_followed": 0,
+            "pagination_stopped_reasons": [],
+            "extracted_field_names": list(cleaned_rows[0].keys()) if cleaned_rows else [],
+            "notes": [
+                f"Applied cleaner config {clean_csv['cleaner_config_path']}.",
+                f"Wrote cleaned dataset to {clean_csv['cleaned_output_path']}.",
+            ],
+            "errors": [],
+            "targets": [],
+            "diagnostics": {"pagination_stop_reason_counts": {}},
+            "limits": {},
+            "sync_attempted": bool(sync_result.get("attempted")),
+            "sync_success": bool(sync_result.get("success")),
+            "sync_result": sync_result,
+            "config_snapshot": config.to_dict(),
+            "clean_csv": clean_csv,
+        }
+        report["quality_metrics"] = self._build_quality_metrics(
+            cleaned_rows,
+            report["extracted_field_names"],
+        )
+
+        if config.output.write_summary:
+            write_summary(
+                run_context.output_dir / self._get_output_file_name(config, "summary", "summary.txt"),
+                report,
+            )
+        if config.output.write_report:
+            write_run_report(
+                run_context.output_dir / self._get_output_file_name(config, "report", "run_report.json"),
+                report,
+            )
+        log_event(
+            logger,
+            logging.INFO,
+            "WRITE OUTPUTS",
+            "Wrote clean_csv outputs.",
+            cleaned_output=clean_csv["cleaned_output_path"],
+            cleaned_rows=len(cleaned_rows),
+            summary=config.output.write_summary,
+            run_report=config.output.write_report,
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "END RUN",
+            "Clean CSV run complete.",
+            run_name=run_context.run_name,
+            row_count=report["row_count"],
+            duration=report["duration"],
+        )
+        return PipelineResult(
+            run_context=run_context,
+            rows=cleaned_rows,
+            report=report,
+            sync_result=sync_result,
+        )
+
+    def _write_configured_cleaned_output(
+        self,
+        rows: list[dict[str, Any]],
+        config,
+        run_context,
+        logger,
+    ) -> dict[str, Any] | None:
+        settings = self._get_lead_cleaning_settings(config)
+        if not settings.get("enabled"):
+            return None
+
+        output_path = run_context.output_dir / cleaned_output_file_name(settings)
+        try:
+            cleaned_output = write_cleaned_lead_csv(output_path, rows, settings)
+        except Exception as error:
+            log_event(
+                logger,
+                logging.WARNING,
+                "WRITE OUTPUTS",
+                "Failed to write cleaned lead output; continuing with standard outputs.",
+                cleaned_output_file=output_path,
+                error=str(error),
+            )
+            return {
+                "enabled": True,
+                "path": str(output_path),
+                "file_name": output_path.name,
+                "success": False,
+                "error": str(error),
+            }
+
+        cleaned_output["enabled"] = True
+        cleaned_output["success"] = True
+        return cleaned_output
+
+    def _get_lead_cleaning_settings(self, config) -> dict[str, Any]:
+        settings = config.metadata.get("lead_cleaning", {})
+        return settings if isinstance(settings, dict) else {}
+
+    def _expand_rows_with_input_context(
+        self,
+        rows: list[dict[str, Any]],
+        target_contexts: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        if not target_contexts:
+            return rows
+
+        expanded_rows: list[dict[str, Any]] = []
+        for row in rows:
+            input_url = str(row.get("input_url") or "")
+            contexts = target_contexts.get(input_url)
+            if not contexts:
+                expanded_rows.append(row)
+                continue
+            for context in contexts:
+                expanded_rows.append({**context, **row})
+        return expanded_rows
 
     def _build_quality_metrics(
         self,

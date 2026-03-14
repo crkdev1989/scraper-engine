@@ -1,9 +1,9 @@
-name: ntl_maryland_attorneys
+name: ntl_dc_attorneys
 mode: directory_detail
-description: Private Playwright-backed directory_detail preset for The National Trial Lawyers Maryland member directory.
+description: Private Playwright-backed directory_detail preset for The National Trial Lawyers District of Columbia member directory.
 
 static_targets:
-  - https://thenationaltriallawyers.org/member-directory/?_regions=maryland
+  - https://thenationaltriallawyers.org/member-directory/?_regions=district-of-columbia
 
 requests:
   timeout_seconds: 45
@@ -86,7 +86,7 @@ sync:
   dry_run: true
 
 schema:
-  name: ntl_maryland_attorneys
+  name: ntl_dc_attorneys
   columns:
     - input_url
     - source_directory

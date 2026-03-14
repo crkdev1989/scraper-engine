@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from scraper_engine.core.models import CrawlPage, DetailPageConfig, EngineConfig, PaginationConfig, RunContext
 from scraper_engine.core.record_post_processor import RecordPostProcessor
@@ -99,6 +100,8 @@ class JobRunner:
                             "page_url": page.url,
                             "status_code": page.status_code,
                             "source_urls": [page.url],
+                            "email_source_urls": [page.url] if extracted.get("emails") else [],
+                            "phone_source_urls": [page.url] if extracted.get("phones") else [],
                             **extracted,
                         }
                     )
@@ -126,6 +129,11 @@ class JobRunner:
                         self.logger.exception("Extraction failed for %s", page.url)
 
             mapped_rows = self.mapper.map_rows(target, page_payloads, config)
+            if self._should_add_contact_summary_fields(config):
+                mapped_rows = [
+                    self._add_contact_summary_fields(row, seed_url=target)
+                    for row in mapped_rows
+                ]
             mapped_rows = self._cap_records(
                 mapped_rows,
                 current_count=len(rows),
@@ -186,6 +194,106 @@ class JobRunner:
             "limits": self._build_limits_report(config, limits_state),
         }
         return rows, report
+
+    def _should_add_contact_summary_fields(self, config: EngineConfig) -> bool:
+        contact_discovery = config.metadata.get("contact_discovery", {})
+        return isinstance(contact_discovery, dict) and bool(contact_discovery.get("enabled"))
+
+    def _add_contact_summary_fields(
+        self,
+        row: dict[str, Any],
+        seed_url: str,
+    ) -> dict[str, Any]:
+        enriched = dict(row)
+        emails = self._coerce_to_list(enriched.get("emails"))
+        contact_pages = self._coerce_to_list(enriched.get("contact_pages"))
+        phones = self._coerce_to_list(enriched.get("phones"))
+        email_source_urls = self._coerce_to_list(enriched.pop("email_source_urls", []))
+        phone_source_urls = self._coerce_to_list(enriched.pop("phone_source_urls", []))
+
+        if emails:
+            enriched["email"] = self._select_best_contact_email(emails, seed_url, email_source_urls)
+        if contact_pages:
+            enriched["contact_page_url"] = self._select_best_contact_page(contact_pages)
+        if email_source_urls:
+            enriched["email_found_on"] = self._select_best_email_source_page(
+                email_source_urls,
+                contact_pages,
+            )
+        if phones:
+            enriched["contact_phone"] = phones[0]
+        return enriched
+
+    def _coerce_to_list(self, value: Any) -> list[str]:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item not in (None, "")]
+        return [str(value)]
+
+    def _select_best_contact_email(
+        self,
+        emails: list[str],
+        seed_url: str,
+        email_source_urls: list[str],
+    ) -> str:
+        preferred_prefixes = (
+            "info",
+            "contact",
+            "hello",
+            "intake",
+            "office",
+            "admin",
+            "support",
+        )
+        seed_domain = (urlparse(seed_url).hostname or "").lower()
+        source_urls = {url.lower() for url in email_source_urls}
+
+        def score(email: str) -> tuple[int, int, int, str]:
+            normalized = email.strip().lower()
+            local_part, _, domain = normalized.partition("@")
+            prefix_score = 0
+            for index, prefix in enumerate(preferred_prefixes):
+                if local_part.startswith(prefix):
+                    prefix_score = len(preferred_prefixes) - index
+                    break
+            domain_score = 1 if domain == seed_domain or domain == seed_domain.removeprefix("www.") else 0
+            source_score = 1 if any(keyword in source_url for source_url in source_urls for keyword in ("contact", "about", "team")) else 0
+            return (prefix_score, domain_score, source_score, normalized)
+
+        return max(emails, key=score)
+
+    def _select_best_contact_page(self, contact_pages: list[str]) -> str:
+        def score(url: str) -> tuple[int, int, str]:
+            lowered = url.lower()
+            if "/contact" in lowered or "contact-us" in lowered:
+                return (3, -len(url), lowered)
+            if "/about" in lowered:
+                return (2, -len(url), lowered)
+            if "/team" in lowered or "/staff" in lowered:
+                return (1, -len(url), lowered)
+            return (0, -len(url), lowered)
+
+        return max(contact_pages, key=score)
+
+    def _select_best_email_source_page(
+        self,
+        email_source_urls: list[str],
+        contact_pages: list[str],
+    ) -> str:
+        contact_page_set = {url.lower() for url in contact_pages}
+
+        def score(url: str) -> tuple[int, int, str]:
+            lowered = url.lower()
+            if lowered in contact_page_set:
+                return (3, -len(url), lowered)
+            if "/contact" in lowered or "contact-us" in lowered:
+                return (2, -len(url), lowered)
+            if "/about" in lowered or "/team" in lowered:
+                return (1, -len(url), lowered)
+            return (0, -len(url), lowered)
+
+        return max(email_source_urls, key=score)
 
     def _run_directory_list(
         self,

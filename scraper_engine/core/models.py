@@ -34,6 +34,8 @@ class CrawlConfig:
     max_pages: int = 10
     concurrency: int = 5
     priority_keywords: list[str] = field(default_factory=lambda: list(DEFAULT_PRIORITY_KEYWORDS))
+    include_url_keywords: list[str] = field(default_factory=list)
+    exclude_url_keywords: list[str] = field(default_factory=list)
     store_debug_html: bool = False
 
 

@@ -8,10 +8,18 @@ from urllib.parse import parse_qs, urlparse
 from scraper_engine.core.models import RunContext
 
 
+TIMESTAMP_SUFFIX_PATTERN = re.compile(r"(?:_\d{8}_\d{6})+$")
+
+
 def slugify(value: str) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9]+", "_", value)
     return value.strip("_") or "run"
+
+
+def strip_trailing_timestamp(value: str) -> str:
+    cleaned = TIMESTAMP_SUFFIX_PATTERN.sub("", value.strip())
+    return cleaned or value.strip()
 
 
 def build_run_context(
@@ -22,7 +30,8 @@ def build_run_context(
     save_raw_html: bool,
 ) -> RunContext:
     started_at = datetime.now(timezone.utc)
-    run_label = slugify(requested_run_name or config_name)
+    base_label = strip_trailing_timestamp(requested_run_name or config_name)
+    run_label = slugify(base_label)
     timestamp = started_at.strftime("%Y%m%d_%H%M%S")
     run_name = f"{run_label}_{timestamp}"
     output_dir = output_root / run_name

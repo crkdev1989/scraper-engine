@@ -119,6 +119,11 @@ class Crawler:
                             for link in discovered_links
                             if same_domain(normalized_seed, link.url)
                         ]
+                    discovered_links = [
+                        link
+                        for link in discovered_links
+                        if self._should_follow_link(link.url, link.anchor_text, crawl_config)
+                    ]
 
                     ranked_links = sort_links(discovered_links, crawl_config.priority_keywords)
                     page.links = [link.url for link in ranked_links]
@@ -141,3 +146,28 @@ class Crawler:
             f"Crawled {len(result.pages)} page(s) for {normalized_seed} with max_pages={crawl_config.max_pages}."
         )
         return result
+
+    def _should_follow_link(
+        self,
+        url: str,
+        anchor_text: str,
+        crawl_config: CrawlConfig,
+    ) -> bool:
+        haystacks = (url.lower(), anchor_text.lower())
+
+        exclude_keywords = [keyword.lower() for keyword in crawl_config.exclude_url_keywords]
+        if exclude_keywords and any(
+            keyword in haystack
+            for keyword in exclude_keywords
+            for haystack in haystacks
+        ):
+            return False
+
+        include_keywords = [keyword.lower() for keyword in crawl_config.include_url_keywords]
+        if not include_keywords:
+            return True
+        return any(
+            keyword in haystack
+            for keyword in include_keywords
+            for haystack in haystacks
+        )

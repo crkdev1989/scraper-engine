@@ -1,0 +1,180 @@
+name: website_contact_csv_enrich
+mode: site_scan
+description: Private CSV-driven contact discovery workflow that enriches source rows using website URLs.
+
+requests:
+  timeout_seconds: 20
+  retries: 3
+  backoff_seconds: 1.5
+  verify_ssl: true
+  allow_insecure_fallback: false
+
+crawl:
+  mode: site_scan
+  same_domain_only: true
+  max_pages: 4
+  concurrency: 2
+  priority_keywords:
+    - contact
+    - contact-us
+    - about
+    - team
+    - staff
+    - office
+    - location
+  include_url_keywords:
+    - contact
+    - contact-us
+    - about
+    - team
+    - staff
+    - office
+    - location
+  exclude_url_keywords:
+    - blog
+    - news
+    - article
+    - articles
+    - resource
+    - resources
+    - faq
+    - search
+    - category
+    - tag
+    - archive
+    - case-results
+  store_debug_html: false
+
+extraction:
+  fields:
+    - name: page_title
+      type: page_title
+    - name: contact_pages
+      type: contact_links
+      many: true
+      default: []
+    - name: emails
+      type: emails
+      many: true
+      default: []
+    - name: phones
+      type: phones
+      many: true
+      default: []
+    - name: social_links
+      type: social_links
+      many: true
+      default: []
+
+output:
+  root_dir: outputs
+  merge_rows: true
+  write_csv: true
+  write_json: true
+  write_summary: true
+  write_report: true
+  shaping:
+    cleanup_common_fields: true
+    join_fields:
+      emails: "; "
+      contact_pages: "; "
+      phones: "; "
+      social_links: "; "
+      source_urls: "; "
+    field_order:
+      - name
+      - law_firm
+      - city
+      - state
+      - website
+      - profile_url
+      - source_directory
+      - input_url
+      - email
+      - contact_page_url
+      - email_found_on
+      - contact_phone
+      - emails
+      - contact_pages
+      - phones
+      - social_links
+      - source_urls
+      - page_title
+
+logging:
+  level: INFO
+  file_name: run.log
+
+sync:
+  enabled: false
+  strategy: rsync
+  dry_run: true
+
+schema:
+  name: website_contact_csv_enrich
+  columns:
+    - name
+    - law_firm
+    - city
+    - state
+    - website
+    - profile_url
+    - source_directory
+    - input_url
+    - email
+    - contact_page_url
+    - email_found_on
+    - contact_phone
+    - emails
+    - contact_pages
+    - phones
+    - social_links
+    - source_urls
+    - page_title
+
+metadata:
+  audience: private
+  private_only: true
+  output_files:
+    csv: CONTACT_ENRICHED.csv
+    json: CONTACT_ENRICHED.json
+    summary: CONTACT_ENRICHED_SUMMARY.txt
+    report: CONTACT_ENRICHED_REPORT.json
+  input_csv:
+    url_column: website
+    preserve_columns:
+      - name
+      - law_firm
+      - city
+      - state
+      - website
+      - profile_url
+      - source_directory
+  contact_discovery:
+    enabled: true
+  lead_cleaning:
+    enabled: false
+    file_name: LEADS_PREVIEW.csv
+    required_fields:
+      - website
+      - email
+    rename_fields:
+      law_firm: firm
+      website: url
+    include_fields:
+      - firm
+      - name
+      - url
+      - email
+      - contact_page_url
+      - profile_url
+      - source_directory
+    sort_fields:
+      - firm
+      - email
+    junk_email_substrings:
+      - sentry.io
+      - wixpress.com
+      - ingest.sentry
+      - "@example.com"
+      - johndoe

@@ -1,0 +1,33 @@
+{
+  "name": "law_firm_leads_cleaner",
+  "mode": "clean_csv",
+  "description": "Run csv-cleaner law firm lead rules against scraper-engine output.",
+  "output": {
+    "root_dir": "outputs",
+    "write_csv": false,
+    "write_json": false,
+    "write_summary": true,
+    "write_report": true
+  },
+  "logging": {
+    "level": "INFO",
+    "file_name": "run.log"
+  },
+  "sync": {
+    "enabled": false,
+    "strategy": "rsync",
+    "dry_run": true
+  },
+  "metadata": {
+    "output_files": {
+      "summary": "LEADS_CLEAN_SUMMARY.txt",
+      "report": "LEADS_CLEAN_REPORT.json"
+    },
+    "clean_csv": {
+      "cleaner_project_root": "../../../csv-cleaner",
+      "cleaner_config_path": "../../../csv-cleaner/configs/law_firm_leads.json",
+      "output_file_name": "LEADS_CLEAN.csv",
+      "report_file_name": "cleaner_report.json"
+    }
+  }
+}
