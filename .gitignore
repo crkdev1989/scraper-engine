@@ -11,4 +11,9 @@ __pycache__/
 *.bak
 dist/
 build/
-*.egg-info/
+*.egg-info/venv/
+.venv/
+__pycache__/
+*.pyc
+outputs/
+logs/
